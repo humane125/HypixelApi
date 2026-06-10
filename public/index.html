@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hypixel SkyBlock Auction Service</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=VT323&display=swap" rel="stylesheet">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1><span>SkyBlock</span> Auction Service</h1>
+        <p id="cache-line" class="muted">Cache not loaded</p>
+      </div>
+      <div class="topbar-actions">
+        <input id="api-token" class="token-input" type="password" placeholder="API token">
+        <button id="btn-refresh" class="btn secondary" type="button">Refresh Index</button>
+      </div>
+    </header>
+
+    <section id="progress-panel" class="progress-panel hidden">
+      <div class="progress-meta">
+        <span id="progress-status">Waiting</span>
+        <span id="progress-percent">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+    </section>
+
+    <section class="control-panel">
+      <form id="search-form" class="search-grid">
+        <label class="field item-field">
+          <span>Exact Item</span>
+          <input id="item-name" type="text" value="Final Destination Chestplate" autocomplete="off" required>
+        </label>
+
+        <label class="field">
+          <span>Rarity</span>
+          <select id="filter-rarity">
+            <option value="any" selected>Any</option>
+            <option value="LEGENDARY">Legendary</option>
+            <option value="MYTHIC">Mythic</option>
+            <option value="EPIC">Epic</option>
+            <option value="RARE">Rare</option>
+            <option value="UNCOMMON">Uncommon</option>
+            <option value="COMMON">Common</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Recomb</span>
+          <select id="filter-recomb">
+            <option value="any">Any</option>
+            <option value="yes">Yes</option>
+            <option value="no" selected>No</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Stars</span>
+          <select id="filter-stars">
+            <option value="any" selected>Any</option>
+            <option value="0">0+</option>
+            <option value="1">1+</option>
+            <option value="2">2+</option>
+            <option value="3">3+</option>
+            <option value="4">4+</option>
+            <option value="5">5+</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Min Kills</span>
+          <input id="min-kills" type="number" min="0" value="25000">
+        </label>
+
+        <label class="field">
+          <span>Max Kills</span>
+          <input id="max-kills" type="number" min="0" value="30000">
+        </label>
+
+        <label class="field">
+          <span>Min Price</span>
+          <input id="min-price" type="number" min="0" placeholder="0">
+        </label>
+
+        <label class="field">
+          <span>Max Price</span>
+          <input id="max-price" type="number" min="0" placeholder="Any">
+        </label>
+
+        <label class="field enchant-field">
+          <span>Enchants</span>
+          <input id="enchant-filter" type="text" placeholder="e.g. Growth V, Protection V">
+        </label>
+
+        <label class="field">
+          <span>Sort</span>
+          <select id="sort-order">
+            <option value="price_asc" selected>Price Low</option>
+            <option value="price_desc">Price High</option>
+            <option value="kills_desc">Kills High</option>
+            <option value="ending_soon">Ending Soon</option>
+          </select>
+        </label>
+
+        <div class="form-actions">
+          <button id="btn-search" class="btn primary" type="submit">Search</button>
+          <button id="btn-recommend" class="btn gold" type="button">Recommend BIN</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="stats-row">
+      <article class="stat-card rarity-legendary">
+        <span>Lowest BIN</span>
+        <strong id="stat-lowest">---</strong>
+        <small id="stat-lowest-detail">No result</small>
+      </article>
+      <article class="stat-card rarity-mythic">
+        <span>Average BIN</span>
+        <strong id="stat-average">---</strong>
+        <small>Filtered listings</small>
+      </article>
+      <article class="stat-card rarity-rare">
+        <span>Matches</span>
+        <strong id="stat-count">0</strong>
+        <small id="stat-source">Waiting</small>
+      </article>
+      <article class="stat-card recommendation-card">
+        <span>Recommended BIN</span>
+        <strong id="stat-recommend">---</strong>
+        <small id="stat-recommend-detail">Run recommendation</small>
+      </article>
+    </section>
+
+    <section class="results-panel">
+      <div class="section-heading">
+        <h2>Active BIN Listings</h2>
+        <span id="results-count" class="pill">0 results</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Price</th>
+              <th>Rarity</th>
+              <th>Kills</th>
+              <th>Stars</th>
+              <th>Recomb</th>
+              <th>Enchants</th>
+              <th>Seller</th>
+              <th>Ends</th>
+              <th>Name</th>
+            </tr>
+          </thead>
+          <tbody id="results-tbody">
+            <tr>
+              <td colspan="10" class="empty-cell">No results loaded</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="tooltip-modal" class="modal hidden">
+    <button id="modal-close" class="modal-scrim" type="button" aria-label="Close item lore"></button>
+    <section class="mc-tooltip">
+      <div class="tooltip-head">
+        <strong id="tooltip-item-name">Item Name</strong>
+        <button id="btn-close-tooltip" type="button">x</button>
+      </div>
+      <div id="tooltip-item-lore" class="tooltip-lore"></div>
+      <footer class="tooltip-footer">
+        <span id="tooltip-price">0 coins</span>
+        <span id="tooltip-seller">Unknown seller</span>
+        <span id="tooltip-time">Ended</span>
+      </footer>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
