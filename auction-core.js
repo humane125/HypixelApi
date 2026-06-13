@@ -5,6 +5,18 @@ const FINAL_DESTINATION_BASE_NAMES = [
   'Final Destination Boots',
 ];
 
+const WISE_DRAGON_BASE_NAMES = [
+  'Wise Dragon Helmet',
+  'Wise Dragon Chestplate',
+  'Wise Dragon Leggings',
+  'Wise Dragon Boots',
+];
+
+const EXACT_BASE_NAMES = [
+  ...FINAL_DESTINATION_BASE_NAMES,
+  ...WISE_DRAGON_BASE_NAMES,
+];
+
 const KNOWN_REFORGES = new Set([
   'Ancient',
   'Clean',
@@ -20,6 +32,7 @@ const KNOWN_REFORGES = new Set([
   'Renowned',
   'Hyper',
   'Heroic',
+  'Very',
 ]);
 
 const ROMAN_VALUES = {
@@ -31,6 +44,7 @@ const ROMAN_VALUES = {
 };
 
 const RECOMMENDATION_MAX_PRICE = 30_000_000;
+const FINAL_DESTINATION_25K_FALLBACK_PRICE = 25_000_000;
 const SINGLE_LOW_OUTLIER_THRESHOLD = 17_000_000;
 const SINGLE_LOW_OUTLIER_RECOMMENDATION = 20_000_000;
 const LOW_CLUSTER_MAX_PRICE = 17_500_000;
@@ -163,7 +177,7 @@ function extractBaseNameAndReforge(cleanName) {
     .replace(/[✿➊➋➌➍➎]/g, '')
     .trim();
 
-  for (const baseName of FINAL_DESTINATION_BASE_NAMES) {
+  for (const baseName of EXACT_BASE_NAMES) {
     const idx = name.toLowerCase().lastIndexOf(baseName.toLowerCase());
     if (idx === -1) continue;
 
@@ -278,7 +292,8 @@ function searchIndexedAuctions(indexedAuctions, request = {}) {
   if (!queryKey) return [];
 
   const filtered = indexedAuctions.filter((item) => {
-    if (item.baseKey !== queryKey) return false;
+    const displayKey = normalizeKey(item.displayName || item.item_name || '');
+    if (item.baseKey !== queryKey && !displayKey.includes(queryKey)) return false;
     return matchesFilters(item, request.filters || {});
   });
 
@@ -399,6 +414,14 @@ function computeBaseline(items) {
   };
 }
 
+function isFinalDestination25kRequest(baseName, attributes = {}) {
+  if (!FINAL_DESTINATION_BASE_NAMES.includes(baseName)) return false;
+
+  if (attributes.minKills != null) return Number(attributes.minKills) >= 25_000;
+  if (attributes.kills != null) return Number(attributes.kills) >= 25_000;
+  return false;
+}
+
 function recommendBin(indexedAuctions, request = {}) {
   const baseName = request.baseName || request.query || '';
   const baseKey = normalizeKey(baseName);
@@ -436,17 +459,23 @@ function recommendBin(indexedAuctions, request = {}) {
 
   const relaxedComparables = sortItems(sameBase.filter((item) => matchesFilters(item, buildComparableFilters(attributes, false))), 'price_asc');
   const baselinePrice = baseline.trimmedAverage || baseline.median;
-  const recommendedPrice = Math.min(
+  let recommendedPrice = Math.min(
     RECOMMENDATION_MAX_PRICE,
     Math.max(baselinePrice - undercutAmount(baselinePrice), baseline.floor || 0)
   );
   const rulesRelaxed = ['kills', 'stars', 'recomb', 'enchants'];
+  let basis = 'baseline';
 
   warnings.push(`No exact comparable listings found; relaxed ${rulesRelaxed.join(', ')} and used guarded market baseline.`);
+  if (recommendedPrice < FINAL_DESTINATION_25K_FALLBACK_PRICE && isFinalDestination25kRequest(baseName, attributes)) {
+    recommendedPrice = FINAL_DESTINATION_25K_FALLBACK_PRICE;
+    basis = 'final_destination_25k_floor';
+    warnings.push('No exact 25k Final Destination comparable listings found; using 25m fallback floor.');
+  }
 
   return {
     recommendedPrice,
-    basis: 'baseline',
+    basis,
     comparables: relaxedComparables.slice(0, Number(request.limit || 10)),
     baseline,
     rulesRelaxed,

@@ -288,6 +288,9 @@ Recommendation rules:
 8. Low-market guard:
    - One listing under `17,000,000` is treated as an outlier and returns `20,000,000`.
    - A cluster of at least 3 listings near `17,000,000` is trusted and undercut normally.
+9. Final Destination 25k fallback:
+   - If a Final Destination armor request is for `25,000`+ kills and no exact comparable is found, the fallback recommendation will not go below `25,000,000`.
+   - This prevents cheap `0` kill base listings from dragging 25k armor recommendations down.
 
 Example:
 
