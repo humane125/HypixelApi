@@ -12,23 +12,57 @@ All JSON endpoints return JSON. The refresh endpoint returns Server-Sent Events.
 
 This service does not need a Hypixel API key for its current auction data fetches.
 
-If `AUCTION_API_TOKEN` is set, pass it using one of these methods:
+API access is controlled by database-backed API keys. API keys are for mods, external scripts, and auction API calls.
+
+Pass API keys with:
+
+```http
+Authorization: Bearer hpx_live_your_key
+```
+
+Legacy clients can still send:
 
 ```http
 X-Auction-Token: your-token
 ```
 
-```http
-Authorization: Bearer your-token
-```
-
-For `GET` endpoints you can also pass:
+For Server-Sent Events through browser `EventSource`, query-string token support remains available only on stream endpoints such as `/api/index/refresh` and legacy `/api/scan`:
 
 ```text
 ?token=your-token
 ```
 
-If `AUCTION_API_TOKEN` is not set, authentication is disabled.
+Normal JSON endpoints reject query-string API keys. Use headers for those requests because URLs can leak into logs and browser history.
+
+First-run bootstrap:
+
+- `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` seed the first owner dashboard login.
+- `OWNER_API_KEY` seeds the first owner API key.
+- `AUCTION_API_TOKEN` is accepted as a backwards-compatible API bootstrap key.
+- If no dashboard login is configured and the database has no password users, the server prints a first-run dashboard password on startup.
+- If no API bootstrap key is configured and the database has no API keys, the server prints a one-time generated owner API key on startup.
+- Dashboard login has in-memory throttling for repeated failed attempts.
+- `DASHBOARD_COOKIE_SECURE=true` forces `Secure` on dashboard cookies. The server also enables it automatically when the request has `X-Forwarded-Proto: https`.
+
+Scopes:
+
+- `admin`: manage API keys.
+- `auction:read`: call auction/search/recommend/usernames APIs.
+- `accounts:read`: view registered Minecraft accounts.
+- `accounts:write`: create accounts and update account status.
+- `mod:connect`: connect the Minecraft mod WebSocket and register heartbeat status.
+
+Dashboard roles:
+
+- `owner`: create/delete dashboard users, assign roles, manage API keys, and create/update/delete Minecraft accounts.
+- `manager`: create/update Minecraft accounts.
+- `viewer`: view dashboard data only.
+
+The dashboard renders registered Minecraft account avatars with Mineatar:
+
+```text
+https://api.mineatar.io/face/<uuid>?scale=8&overlay=true&format=png
+```
 
 ## Cache Model
 
@@ -329,6 +363,8 @@ Response:
 
 Resolves Minecraft UUIDs to usernames through Mojang APIs.
 
+Requires `auction:read`.
+
 Request:
 
 ```json
@@ -346,6 +382,300 @@ Response:
   "uuid2": "OtherName"
 }
 ```
+
+## Dashboard API
+
+Dashboard endpoints use username/password login and an HTTP-only `dashboard_session` cookie. They do not accept API keys.
+
+### `POST /api/dashboard/login`
+
+Request:
+
+```json
+{
+  "username": "owner",
+  "password": "your dashboard password"
+}
+```
+
+Response sets the `dashboard_session` cookie:
+
+```json
+{
+  "user": {
+    "id": 1,
+    "username": "owner",
+    "role": "owner"
+  },
+  "expiresAt": "2026-06-22T10:31:56.507Z"
+}
+```
+
+### `POST /api/dashboard/logout`
+
+Revokes the current dashboard session cookie.
+
+### `GET /api/dashboard/me`
+
+Returns the authenticated dashboard user and session metadata.
+
+### `GET /api/dashboard/accounts`
+
+Requires a dashboard session. All dashboard roles can read accounts.
+
+Response:
+
+```json
+{
+  "accounts": [
+    {
+      "id": 1,
+      "label": "RDP Main",
+      "minecraft_uuid": "00000000-0000-0000-0000-000000000001",
+      "minecraft_username": "PlayerOne",
+      "status": "active",
+      "notes": "",
+      "ban_reason": null,
+      "banned_at": null,
+      "owner_username": "owner"
+    }
+  ]
+}
+```
+
+### `POST /api/dashboard/accounts`
+
+Requires dashboard role `owner` or `manager`.
+
+Request:
+
+```json
+{
+  "label": "RDP Main",
+  "minecraftUuid": "00000000-0000-0000-0000-000000000001",
+  "minecraftUsername": "PlayerOne",
+  "notes": "primary account"
+}
+```
+
+### `POST /api/dashboard/accounts/status`
+
+Requires dashboard role `owner` or `manager`.
+
+Request:
+
+```json
+{
+  "accountId": 1,
+  "status": "banned",
+  "banReason": "Detected ban screen"
+}
+```
+
+### `POST /api/dashboard/accounts/delete`
+
+Requires dashboard role `owner`.
+
+Request:
+
+```json
+{
+  "accountId": 1
+}
+```
+
+Allowed statuses:
+
+- `active`
+- `offline`
+- `locked`
+- `banned`
+
+### `GET /api/dashboard/api-keys`
+
+Requires dashboard role `owner`.
+
+Lists key metadata only. Raw keys are never returned after creation.
+
+### `POST /api/dashboard/api-keys`
+
+Requires dashboard role `owner`.
+
+API keys can only be assigned to existing dashboard users with passwords. Create the dashboard user first, then pass that user's `id`.
+
+Request:
+
+```json
+{
+  "userId": 2,
+  "name": "Friend mod key",
+  "scopes": ["auction:read", "mod:connect"]
+}
+```
+
+Response includes the raw key once:
+
+```json
+{
+  "apiKey": {
+    "id": 2,
+    "name": "Friend mod key",
+    "prefix": "hpx_live_ab",
+    "scopes": ["auction:read", "mod:connect"],
+    "rawKey": "hpx_live_..."
+  }
+}
+```
+
+### `POST /api/dashboard/api-keys/revoke`
+
+Requires dashboard role `owner`.
+
+Request:
+
+```json
+{
+  "apiKeyId": 2
+}
+```
+
+### `GET /api/dashboard/users`
+
+Requires dashboard role `owner`.
+
+Response:
+
+```json
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "owner",
+      "role": "owner",
+      "has_password": 1,
+      "created_at": "2026-06-15T10:31:56.507Z",
+      "disabled_at": null
+    }
+  ]
+}
+```
+
+### `POST /api/dashboard/users`
+
+Requires dashboard role `owner`.
+
+Request:
+
+```json
+{
+  "username": "friend",
+  "password": "at-least-8-characters",
+  "role": "manager"
+}
+```
+
+Allowed roles:
+
+- `owner`
+- `manager`
+- `viewer`
+
+### `POST /api/dashboard/users/role`
+
+Requires dashboard role `owner`.
+
+Request:
+
+```json
+{
+  "userId": 2,
+  "role": "viewer"
+}
+```
+
+### `POST /api/dashboard/users/password`
+
+Requires dashboard role `owner`.
+
+Request:
+
+```json
+{
+  "userId": 2,
+  "password": "new-password"
+}
+```
+
+### `POST /api/dashboard/users/delete`
+
+Requires dashboard role `owner`.
+
+The currently logged-in owner cannot delete their own active dashboard user from the same session.
+
+Request:
+
+```json
+{
+  "userId": 2
+}
+```
+
+## Mod WebSocket
+
+### `GET /api/mod/ws`
+
+The Minecraft mod connects with WebSocket and authenticates in the first message. Do not put the API key in the URL.
+
+The API key must include `mod:connect`.
+
+Client auth message:
+
+```json
+{
+  "type": "auth",
+  "apiKey": "hpx_live_...",
+  "username": "MinecraftName",
+  "clientVersion": "1.0.0"
+}
+```
+
+Server behavior:
+
+1. Validates the API key and `mod:connect` scope.
+2. Fetches the UUID from Mojang using `https://api.mojang.com/users/profiles/minecraft/<username>`.
+3. Creates or updates the Minecraft account.
+4. Assigns the account to the dashboard user that owns the API key.
+5. Sets `last_connected_at`, `last_seen_at`, and `client_version`.
+
+Success response:
+
+```json
+{
+  "type": "auth_ok",
+  "account": {
+    "minecraft_username": "MinecraftName",
+    "status": "active"
+  }
+}
+```
+
+After auth, the mod sends:
+
+```json
+{ "type": "heartbeat" }
+```
+
+The server replies:
+
+```json
+{
+  "type": "heartbeat_ok",
+  "accountId": 1,
+  "lastSeenAt": "2026-06-15T11:00:00.000Z"
+}
+```
+
+Accounts with stale `last_seen_at` are shown as `offline` in dashboard account listings.
 
 ## Legacy `GET /api/scan`
 

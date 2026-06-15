@@ -1,0 +1,27 @@
+{
+  "name": "test-api",
+  "version": "1.0.0",
+  "description": "Local Node.js service for scanning Hypixel SkyBlock BIN auctions, searching Final Destination armor, and calculating a suggested listing price for a future Minecraft mod.",
+  "main": "server.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test": "node tests/auction-core.test.js && node tests/auth-db.test.js && node tests/server-auth.test.js",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.2",
+    "better-sqlite3": "^12.10.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.0.16",
+    "ws": "^8.21.0"
+  }
+}

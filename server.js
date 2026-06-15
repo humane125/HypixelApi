@@ -1,17 +1,50 @@
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
+const { WebSocketServer } = require('ws');
 
 const {
   normalizeAuction,
   searchIndexedAuctions,
   recommendBin,
 } = require('./auction-core');
+const {
+  createDatabase,
+  createUser,
+  createApiKey,
+  authenticateApiKey,
+  listApiKeys,
+  revokeApiKey,
+  countActiveApiKeys,
+  setUserPassword,
+  listDashboardUsers,
+  getDashboardUserById,
+  updateUserRole,
+  deleteDashboardUser,
+  authenticateUserPassword,
+  countPasswordUsers,
+  createDashboardSession,
+  authenticateDashboardSession,
+  revokeDashboardSession,
+  createMinecraftAccount,
+  listMinecraftAccounts,
+  upsertMinecraftAccountFromMod,
+  recordMinecraftAccountHeartbeat,
+  updateMinecraftAccountStatus,
+  deleteMinecraftAccount,
+  writeAuditLog,
+} = require('./auth-db');
 
 const DEFAULT_PORT = 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const HYPIXEL_AUCTIONS_URL = 'https://api.hypixel.net/v2/skyblock/auctions';
+const DEFAULT_LOGIN_RATE_LIMIT = {
+  maxFailures: 5,
+  windowMs: 15 * 60 * 1000,
+  lockMs: 15 * 60 * 1000,
+};
+const DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS = 60_000;
 
 function loadDotEnv(filePath = path.join(__dirname, '.env')) {
   if (!fs.existsSync(filePath)) return;
@@ -266,25 +299,389 @@ async function getUsername(uuid, fetchImpl = global.fetch) {
   return `${uuid.substring(0, 8)}...`;
 }
 
+async function getMinecraftProfileByUsername(username, fetchImpl = global.fetch) {
+  const cleanUsername = String(username || '').trim();
+  if (!cleanUsername) throw new Error('Minecraft username is required');
+
+  const profileUrl = `https://api.mojang.com/users/profiles/minecraft/${encodeURIComponent(cleanUsername)}`;
+  const response = await fetchWithRetry(fetchImpl, profileUrl, {}, 2, 200);
+  if (!response.ok) {
+    throw new Error(`Mojang profile lookup failed: HTTP ${response.status}`);
+  }
+  const profile = await response.json();
+  if (!profile || !profile.id || !profile.name) {
+    throw new Error('Mojang profile lookup did not return a Minecraft profile');
+  }
+  return profile;
+}
+
+function readQueryToken(parsedUrl) {
+  return parsedUrl.searchParams ? parsedUrl.searchParams.get('token') : parsedUrl.query.token;
+}
+
 function createAuthChecker(apiToken) {
-  return function isAuthorized(req, parsedUrl, body = {}) {
+  return function isAuthorized(req, parsedUrl, body = {}, options = {}) {
     if (!apiToken) return true;
 
     const authHeader = req.headers.authorization || '';
     const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7) : null;
-    const supplied = req.headers['x-auction-token'] || bearer || parsedUrl.query.token || body.token;
+    const queryToken = options.allowQueryToken ? readQueryToken(parsedUrl) : null;
+    const supplied = req.headers['x-auction-token'] || bearer || queryToken || body.token;
     return supplied === apiToken;
   };
+}
+
+function extractApiToken(req, parsedUrl, body = {}, options = {}) {
+  const authHeader = req.headers.authorization || '';
+  const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7) : null;
+  const queryToken = options.allowQueryToken ? readQueryToken(parsedUrl) : null;
+  return req.headers['x-api-key']
+    || req.headers['x-auction-token']
+    || bearer
+    || queryToken
+    || body.token
+    || null;
+}
+
+function hasRequiredScopes(auth, requiredScopes = []) {
+  if (!auth) return false;
+  if (!requiredScopes.length) return true;
+  if (auth.user && auth.user.role === 'owner') return true;
+  const scopes = new Set((auth.apiKey && auth.apiKey.scopes) || []);
+  if (scopes.has('admin')) return true;
+  return requiredScopes.every((scope) => scopes.has(scope));
+}
+
+function apiKeyHasScopes(auth, requiredScopes = []) {
+  if (!auth || !auth.apiKey) return false;
+  if (!requiredScopes.length) return true;
+  const scopes = new Set(auth.apiKey.scopes || []);
+  if (scopes.has('admin')) return true;
+  return requiredScopes.every((scope) => scopes.has(scope));
+}
+
+function ensureBootstrapApiKey(db, rawKey) {
+  if (!db || !rawKey) return;
+  const user = createUser(db, { username: 'owner', role: 'owner' });
+  const existing = authenticateApiKey(db, rawKey);
+  if (existing) return;
+
+  try {
+    createApiKey(db, {
+      userId: user.id,
+      name: 'Bootstrap owner key',
+      scopes: ['admin', 'auction:read', 'accounts:read', 'accounts:write', 'mod:connect'],
+      rawKey,
+    });
+  } catch (err) {
+    if (!String(err.message || '').includes('UNIQUE')) {
+      throw err;
+    }
+  }
+}
+
+function createAuthorizer({ db, legacyApiToken }) {
+  const legacyChecker = createAuthChecker(legacyApiToken);
+
+  return function authorize(req, parsedUrl, body = {}, requiredScopes = [], options = {}) {
+    if (db) {
+      const auth = authenticateApiKey(db, extractApiToken(req, parsedUrl, body, options));
+      if (!auth) return { ok: false, status: 401, payload: { error: 'Unauthorized' } };
+      if (!hasRequiredScopes(auth, requiredScopes)) {
+        return { ok: false, status: 403, payload: { error: 'Forbidden' } };
+      }
+      return { ok: true, auth };
+    }
+
+    if (!legacyChecker(req, parsedUrl, body, options)) {
+      return { ok: false, status: 401, payload: { error: 'Unauthorized' } };
+    }
+
+    return {
+      ok: true,
+      auth: {
+        user: { id: null, username: 'legacy-token', role: 'owner' },
+        apiKey: { id: null, name: 'Legacy shared token', scopes: ['admin'] },
+      },
+    };
+  };
+}
+
+function parseCookies(req) {
+  const cookies = {};
+  const header = req.headers.cookie || '';
+  for (const chunk of header.split(';')) {
+    const idx = chunk.indexOf('=');
+    if (idx === -1) continue;
+    const name = chunk.slice(0, idx).trim();
+    const value = chunk.slice(idx + 1).trim();
+    if (name) cookies[name] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+function cookieParts(baseParts, secure = false) {
+  return [
+    ...baseParts,
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
+function sessionCookie(rawToken, maxAgeSeconds = 7 * 24 * 60 * 60, secure = false) {
+  return cookieParts([
+    `dashboard_session=${encodeURIComponent(rawToken)}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    'Path=/',
+    `Max-Age=${maxAgeSeconds}`,
+  ], secure);
+}
+
+function clearSessionCookie(secure = false) {
+  return cookieParts([
+    'dashboard_session=',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Path=/',
+    'Max-Age=0',
+  ], secure);
+}
+
+function clientIp(req) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return forwardedFor.split(',')[0].trim();
+  }
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+function createLoginRateLimiter(options = {}) {
+  const settings = {
+    ...DEFAULT_LOGIN_RATE_LIMIT,
+    ...options,
+  };
+  const attempts = new Map();
+  const now = () => Date.now();
+
+  function keyFor(req, username) {
+    const cleanUsername = String(username || '').trim().toLowerCase() || '<empty>';
+    return `${clientIp(req)}:${cleanUsername}`;
+  }
+
+  function currentEntry(key, timestamp) {
+    const entry = attempts.get(key);
+    if (!entry) return { failures: 0, lastFailureAt: 0, lockedUntil: 0 };
+    if (!entry.lockedUntil && timestamp - entry.lastFailureAt > settings.windowMs) {
+      attempts.delete(key);
+      return { failures: 0, lastFailureAt: 0, lockedUntil: 0 };
+    }
+    return entry;
+  }
+
+  function check(req, username) {
+    const timestamp = now();
+    const entry = currentEntry(keyFor(req, username), timestamp);
+    if (entry.lockedUntil && entry.lockedUntil > timestamp) {
+      return {
+        ok: false,
+        retryAfterSeconds: Math.ceil((entry.lockedUntil - timestamp) / 1000),
+      };
+    }
+    return { ok: true };
+  }
+
+  function recordFailure(req, username) {
+    const timestamp = now();
+    const key = keyFor(req, username);
+    const entry = currentEntry(key, timestamp);
+    const failures = entry.failures + 1;
+    attempts.set(key, {
+      failures,
+      lastFailureAt: timestamp,
+      lockedUntil: failures >= settings.maxFailures ? timestamp + settings.lockMs : 0,
+    });
+  }
+
+  function reset(req, username) {
+    attempts.delete(keyFor(req, username));
+  }
+
+  return { check, recordFailure, reset };
+}
+
+function shouldUseSecureCookies(req, explicitSecureCookies) {
+  if (explicitSecureCookies != null) return Boolean(explicitSecureCookies);
+  const envValue = String(process.env.DASHBOARD_COOKIE_SECURE || process.env.SECURE_COOKIES || '').toLowerCase();
+  if (['1', 'true', 'yes'].includes(envValue)) return true;
+  if (['0', 'false', 'no'].includes(envValue)) return false;
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  return forwardedProto.split(',').map((part) => part.trim()).includes('https')
+    || Boolean(req.socket && req.socket.encrypted);
+}
+
+function ensureBootstrapDashboardUser(db, username, password) {
+  if (!db || !username || !password) return;
+  const user = createUser(db, { username, role: 'owner' });
+  setUserPassword(db, user.id, password);
+}
+
+function createDashboardAuthorizer(db) {
+  return function authorizeDashboard(req) {
+    if (!db) return { ok: false, status: 500, payload: { error: 'Dashboard database is not configured' } };
+    const token = parseCookies(req).dashboard_session;
+    const auth = authenticateDashboardSession(db, token);
+    if (!auth) return { ok: false, status: 401, payload: { error: 'Dashboard login required' } };
+    return { ok: true, auth };
+  };
+}
+
+function requireDashboardOwner(access) {
+  if (!access.ok) return access;
+  if (access.auth.user.role !== 'owner') {
+    return { ok: false, status: 403, payload: { error: 'Owner access required' } };
+  }
+  return access;
+}
+
+function requireDashboardAccountManager(access) {
+  if (!access.ok) return access;
+  if (!['owner', 'manager'].includes(access.auth.user.role)) {
+    return { ok: false, status: 403, payload: { error: 'Owner or manager access required' } };
+  }
+  return access;
+}
+
+function auditRequest(db, auth, req, action, metadata = {}) {
+  if (!db || !auth) return;
+  writeAuditLog(db, {
+    userId: auth.user.id,
+    apiKeyId: auth.apiKey ? auth.apiKey.id : null,
+    action,
+    ip: req.socket && req.socket.remoteAddress,
+    userAgent: req.headers['user-agent'] || null,
+    metadata,
+  });
+}
+
+function sendSocketJson(socket, payload) {
+  if (socket.readyState === socket.OPEN) {
+    socket.send(JSON.stringify(payload));
+  }
+}
+
+function attachModWebSocketServer(server, {
+  db,
+  fetchImpl,
+  enabled = true,
+} = {}) {
+  if (!enabled || !db) return null;
+
+  const socketServer = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (parsedUrl.pathname !== '/api/mod/ws') {
+      socket.destroy();
+      return;
+    }
+    socketServer.handleUpgrade(req, socket, head, (ws) => {
+      socketServer.emit('connection', ws, req);
+    });
+  });
+
+  socketServer.on('connection', (socket, req) => {
+    let authContext = null;
+    let account = null;
+
+    socket.on('message', async (rawMessage) => {
+      let message;
+      try {
+        message = JSON.parse(rawMessage.toString());
+      } catch (err) {
+        sendSocketJson(socket, { type: 'error', code: 'invalid_json', message: 'Invalid JSON message' });
+        return;
+      }
+
+      if (!authContext) {
+        if (message.type !== 'auth') {
+          sendSocketJson(socket, { type: 'error', code: 'auth_required', message: 'Send auth first' });
+          return;
+        }
+
+        const auth = authenticateApiKey(db, message.apiKey);
+        if (!auth) {
+          sendSocketJson(socket, { type: 'error', code: 'unauthorized', message: 'Invalid API key' });
+          return;
+        }
+        if (!apiKeyHasScopes(auth, ['mod:connect'])) {
+          sendSocketJson(socket, { type: 'error', code: 'forbidden', message: 'API key missing mod:connect scope' });
+          return;
+        }
+
+        try {
+          const profile = await getMinecraftProfileByUsername(message.username, fetchImpl);
+          authContext = auth;
+          account = upsertMinecraftAccountFromMod(db, {
+            minecraftUuid: profile.id,
+            minecraftUsername: profile.name,
+            ownerUserId: auth.user.id,
+            clientVersion: message.clientVersion || null,
+          });
+          auditRequest(db, auth, req, 'mod.connect', { accountId: account.id, username: profile.name });
+          sendSocketJson(socket, {
+            type: 'auth_ok',
+            account,
+            user: auth.user,
+          });
+        } catch (err) {
+          sendSocketJson(socket, { type: 'error', code: 'profile_lookup_failed', message: err.message });
+        }
+        return;
+      }
+
+      if (message.type === 'heartbeat') {
+        account = recordMinecraftAccountHeartbeat(db, account.id);
+        sendSocketJson(socket, {
+          type: 'heartbeat_ok',
+          accountId: account.id,
+          lastSeenAt: account.last_seen_at,
+        });
+        return;
+      }
+
+      sendSocketJson(socket, { type: 'error', code: 'unknown_type', message: 'Unknown message type' });
+    });
+  });
+
+  return socketServer;
 }
 
 function createAppServer(options = {}) {
   const publicDir = options.publicDir || PUBLIC_DIR;
   const fetchImpl = options.fetchImpl || global.fetch;
   const auctionIndex = options.auctionIndex || createAuctionIndexService(options);
-  const isAuthorized = createAuthChecker(options.apiToken ?? process.env.AUCTION_API_TOKEN);
+  const db = options.db === false
+    ? null
+    : (options.db || createDatabase(options.databasePath || process.env.DATABASE_PATH || path.join(__dirname, 'data', 'app.db')));
+  const bootstrapToken = options.bootstrapToken ?? process.env.OWNER_API_KEY ?? process.env.AUCTION_API_TOKEN;
+  ensureBootstrapApiKey(db, bootstrapToken);
+  ensureBootstrapDashboardUser(
+    db,
+    options.dashboardUsername ?? process.env.DASHBOARD_USERNAME,
+    options.dashboardPassword ?? process.env.DASHBOARD_PASSWORD
+  );
+  const authorize = createAuthorizer({
+    db,
+    legacyApiToken: options.apiToken ?? process.env.AUCTION_API_TOKEN,
+  });
+  const authorizeDashboard = createDashboardAuthorizer(db);
+  const loginRateLimiter = options.loginRateLimit === false
+    ? null
+    : createLoginRateLimiter(options.loginRateLimit);
+  const secureCookies = options.secureCookies;
 
-  return http.createServer(async (req, res) => {
-    const parsedUrl = url.parse(req.url, true);
+  const accountHeartbeatWindowMs = options.accountHeartbeatWindowMs || DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS;
+  const server = http.createServer(async (req, res) => {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = parsedUrl.pathname;
 
     if (req.method === 'OPTIONS') {
@@ -293,8 +690,9 @@ function createAppServer(options = {}) {
     }
 
     if (pathname === '/api/index/status' && req.method === 'GET') {
-      if (!isAuthorized(req, parsedUrl)) {
-        writeJson(res, 401, { error: 'Unauthorized' });
+      const access = authorize(req, parsedUrl, {}, ['auction:read']);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
         return;
       }
       writeJson(res, 200, auctionIndex.getStatus());
@@ -302,8 +700,9 @@ function createAppServer(options = {}) {
     }
 
     if (pathname === '/api/index/refresh' && req.method === 'GET') {
-      if (!isAuthorized(req, parsedUrl)) {
-        writeJson(res, 401, { error: 'Unauthorized' });
+      const access = authorize(req, parsedUrl, {}, ['auction:read'], { allowQueryToken: true });
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
         return;
       }
 
@@ -330,8 +729,9 @@ function createAppServer(options = {}) {
     if (pathname === '/api/search' && req.method === 'POST') {
       try {
         const body = await parseRequestBody(req);
-        if (!isAuthorized(req, parsedUrl, body)) {
-          writeJson(res, 401, { error: 'Unauthorized' });
+        const access = authorize(req, parsedUrl, body, ['auction:read']);
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
           return;
         }
 
@@ -351,8 +751,9 @@ function createAppServer(options = {}) {
     if (pathname === '/api/recommend-bin' && req.method === 'POST') {
       try {
         const body = await parseRequestBody(req);
-        if (!isAuthorized(req, parsedUrl, body)) {
-          writeJson(res, 401, { error: 'Unauthorized' });
+        const access = authorize(req, parsedUrl, body, ['auction:read']);
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
           return;
         }
 
@@ -370,8 +771,9 @@ function createAppServer(options = {}) {
     }
 
     if (pathname === '/api/scan' && req.method === 'GET') {
-      if (!isAuthorized(req, parsedUrl)) {
-        writeJson(res, 401, { error: 'Unauthorized' });
+      const access = authorize(req, parsedUrl, {}, ['auction:read'], { allowQueryToken: true });
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
         return;
       }
 
@@ -386,7 +788,7 @@ function createAppServer(options = {}) {
       };
 
       try {
-        const targetItem = parsedUrl.query.item || 'Final Destination Chestplate';
+        const targetItem = parsedUrl.searchParams.get('item') || 'Final Destination Chestplate';
         await auctionIndex.ensureFresh(sendSSE);
         const results = searchIndexedAuctions(auctionIndex.getItems(), {
           query: targetItem,
@@ -406,6 +808,11 @@ function createAppServer(options = {}) {
     if (pathname === '/api/usernames' && req.method === 'POST') {
       try {
         const uuids = await parseRequestBody(req);
+        const access = authorize(req, parsedUrl, uuids, ['auction:read']);
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
         const mapping = {};
         await Promise.all((Array.isArray(uuids) ? uuids : []).map(async (uuid) => {
           mapping[uuid] = await getUsername(uuid, fetchImpl);
@@ -413,6 +820,312 @@ function createAppServer(options = {}) {
         writeJson(res, 200, mapping);
       } catch (err) {
         writeJson(res, 400, { error: 'Invalid JSON body' });
+      }
+      return;
+    }
+
+    if (pathname === '/api/auth/me' && req.method === 'GET') {
+      const access = authorize(req, parsedUrl);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      writeJson(res, 200, {
+        user: access.auth.user,
+        apiKey: access.auth.apiKey,
+      });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/login' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const loginLimit = loginRateLimiter ? loginRateLimiter.check(req, body.username) : { ok: true };
+        if (!loginLimit.ok) {
+          writeJson(res, 429, {
+            error: 'Too many login attempts. Try again later.',
+            retryAfterSeconds: loginLimit.retryAfterSeconds,
+          });
+          return;
+        }
+        const user = authenticateUserPassword(db, body.username, body.password);
+        if (!user) {
+          if (loginRateLimiter) loginRateLimiter.recordFailure(req, body.username);
+          writeJson(res, 401, { error: 'Invalid username or password' });
+          return;
+        }
+        if (loginRateLimiter) loginRateLimiter.reset(req, body.username);
+        const session = createDashboardSession(db, user.id);
+        res.setHeader('Set-Cookie', sessionCookie(session.rawToken, undefined, shouldUseSecureCookies(req, secureCookies)));
+        auditRequest(db, { user, apiKey: { id: null } }, req, 'dashboard.login');
+        writeJson(res, 200, {
+          user,
+          expiresAt: session.expiresAt,
+        });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/logout' && req.method === 'POST') {
+      const token = parseCookies(req).dashboard_session;
+      revokeDashboardSession(db, token);
+      res.setHeader('Set-Cookie', clearSessionCookie(shouldUseSecureCookies(req, secureCookies)));
+      writeJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/me' && req.method === 'GET') {
+      const access = authorizeDashboard(req);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      writeJson(res, 200, {
+        user: access.auth.user,
+        session: access.auth.session,
+      });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts' && req.method === 'GET') {
+      const access = authorizeDashboard(req);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      writeJson(res, 200, { accounts: listMinecraftAccounts(db, { heartbeatWindowMs: accountHeartbeatWindowMs }) });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardAccountManager(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const account = createMinecraftAccount(db, {
+          label: body.label,
+          minecraftUuid: body.minecraftUuid,
+          minecraftUsername: body.minecraftUsername,
+          ownerUserId: body.ownerUserId || access.auth.user.id,
+          notes: body.notes,
+        });
+        auditRequest(db, access.auth, req, 'minecraft_account.create', { accountId: account.id });
+        writeJson(res, 201, { account });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts/status' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardAccountManager(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        updateMinecraftAccountStatus(db, body.accountId, {
+          status: body.status,
+          banReason: body.banReason,
+        });
+        auditRequest(db, access.auth, req, 'minecraft_account.status', {
+          accountId: body.accountId,
+          status: body.status,
+        });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts/delete' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        deleteMinecraftAccount(db, body.accountId);
+        auditRequest(db, access.auth, req, 'minecraft_account.delete', {
+          accountId: body.accountId,
+        });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/users' && req.method === 'GET') {
+      const access = requireDashboardOwner(authorizeDashboard(req));
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      writeJson(res, 200, { users: listDashboardUsers(db) });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/users' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const existing = listDashboardUsers(db).find((user) => user.username.toLowerCase() === String(body.username || '').trim().toLowerCase());
+        if (existing) {
+          writeJson(res, 409, { error: 'Dashboard username already exists' });
+          return;
+        }
+        const user = createUser(db, {
+          username: body.username,
+          role: body.role || 'viewer',
+        });
+        updateUserRole(db, user.id, body.role || 'viewer');
+        setUserPassword(db, user.id, body.password);
+        auditRequest(db, access.auth, req, 'dashboard_user.create', {
+          userId: user.id,
+          username: user.username,
+          role: body.role || 'viewer',
+        });
+        writeJson(res, 201, {
+          user: listDashboardUsers(db).find((row) => row.id === user.id),
+        });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/users/role' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        updateUserRole(db, body.userId, body.role);
+        auditRequest(db, access.auth, req, 'dashboard_user.role', {
+          userId: body.userId,
+          role: body.role,
+        });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/users/password' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        setUserPassword(db, body.userId, body.password);
+        auditRequest(db, access.auth, req, 'dashboard_user.password', {
+          userId: body.userId,
+        });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/users/delete' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        if (Number(body.userId) === Number(access.auth.user.id)) {
+          writeJson(res, 400, { error: 'You cannot delete your own active dashboard user' });
+          return;
+        }
+        deleteDashboardUser(db, body.userId);
+        auditRequest(db, access.auth, req, 'dashboard_user.delete', {
+          userId: body.userId,
+        });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/api-keys' && req.method === 'GET') {
+      const access = requireDashboardOwner(authorizeDashboard(req));
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      writeJson(res, 200, { apiKeys: listApiKeys(db) });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/api-keys' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        if (!body.userId) {
+          writeJson(res, 400, { error: 'Select an existing dashboard user for this API key' });
+          return;
+        }
+        const user = getDashboardUserById(db, body.userId);
+        if (!user || user.disabled_at || !user.has_password) {
+          writeJson(res, 400, { error: 'API keys can only be assigned to dashboard users with passwords' });
+          return;
+        }
+        const apiKey = createApiKey(db, {
+          userId: user.id,
+          name: body.name,
+          scopes: Array.isArray(body.scopes) ? body.scopes : ['auction:read'],
+        });
+        auditRequest(db, access.auth, req, 'api_key.create', {
+          apiKeyId: apiKey.id,
+          username: user.username,
+          scopes: apiKey.scopes,
+        });
+        writeJson(res, 201, { user, apiKey });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/api-keys/revoke' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        revokeApiKey(db, body.apiKeyId);
+        auditRequest(db, access.auth, req, 'api_key.revoke', { apiKeyId: body.apiKeyId });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
       }
       return;
     }
@@ -448,6 +1161,13 @@ function createAppServer(options = {}) {
       res.end(content);
     });
   });
+
+  attachModWebSocketServer(server, {
+    db,
+    fetchImpl,
+    enabled: options.modWebSocket !== false,
+  });
+  return server;
 }
 
 if (require.main === module) {
@@ -457,11 +1177,55 @@ if (require.main === module) {
   }
 
   const port = Number(process.env.PORT || DEFAULT_PORT);
-  const server = createAppServer();
+  const databasePath = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'app.db');
+  const configuredBootstrapToken = process.env.OWNER_API_KEY || process.env.AUCTION_API_TOKEN;
+  let generatedBootstrapToken = null;
+  let bootstrapToken = configuredBootstrapToken;
+  const configuredDashboardUsername = process.env.DASHBOARD_USERNAME;
+  const configuredDashboardPassword = process.env.DASHBOARD_PASSWORD;
+  let generatedDashboardPassword = null;
+  let dashboardUsername = configuredDashboardUsername;
+  let dashboardPassword = configuredDashboardPassword;
+
+  if (!bootstrapToken) {
+    const db = createDatabase(databasePath);
+    if (countActiveApiKeys(db) === 0) {
+      generatedBootstrapToken = `hpx_live_${crypto.randomBytes(24).toString('base64url')}`;
+      bootstrapToken = generatedBootstrapToken;
+    }
+    db.close();
+  }
+
+  if (!dashboardUsername || !dashboardPassword) {
+    const db = createDatabase(databasePath);
+    if (countPasswordUsers(db) === 0) {
+      dashboardUsername = dashboardUsername || 'owner';
+      generatedDashboardPassword = crypto.randomBytes(18).toString('base64url');
+      dashboardPassword = generatedDashboardPassword;
+    }
+    db.close();
+  }
+
+  const server = createAppServer({
+    databasePath,
+    bootstrapToken,
+    dashboardUsername,
+    dashboardPassword,
+  });
   server.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    if (!process.env.AUCTION_API_TOKEN) {
-      console.warn('Warning: AUCTION_API_TOKEN is not set. API endpoints are not token-protected.');
+    if (generatedBootstrapToken) {
+      console.warn('Generated first-run owner API key. Save it now, then create named keys in the dashboard:');
+      console.warn(generatedBootstrapToken);
+    } else if (!configuredBootstrapToken) {
+      console.warn('No OWNER_API_KEY or AUCTION_API_TOKEN is set. Existing database API keys are required for access.');
+    }
+    if (generatedDashboardPassword) {
+      console.warn('Generated first-run dashboard login. Save it now, then change it later:');
+      console.warn(`username: ${dashboardUsername}`);
+      console.warn(`password: ${generatedDashboardPassword}`);
+    } else if (!configuredDashboardUsername || !configuredDashboardPassword) {
+      console.warn('No DASHBOARD_USERNAME/DASHBOARD_PASSWORD is set. Existing dashboard users are required for login.');
     }
     console.log('Press Ctrl+C to stop');
   });

@@ -1,0 +1,586 @@
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const Database = require('better-sqlite3');
+
+const API_KEY_PREFIX_LENGTH = 11;
+const SESSION_DAYS = 7;
+const DASHBOARD_ROLES = new Set(['owner', 'manager', 'viewer']);
+const DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS = 60_000;
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function ensureParentDirectory(databasePath) {
+  if (!databasePath || databasePath === ':memory:') return;
+  const dir = path.dirname(path.resolve(databasePath));
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function hashApiKey(rawKey) {
+  return crypto.createHash('sha256').update(String(rawKey)).digest('hex');
+}
+
+function hashToken(rawToken) {
+  return crypto.createHash('sha256').update(String(rawToken)).digest('hex');
+}
+
+function timingSafeEqualHex(a, b) {
+  const left = Buffer.from(String(a || ''), 'hex');
+  const right = Buffer.from(String(b || ''), 'hex');
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function parseScopes(value) {
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function createDatabase(databasePath = path.join(__dirname, 'data', 'app.db')) {
+  ensureParentDirectory(databasePath);
+  const db = new Database(databasePath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  migrateDatabase(db);
+  return db;
+}
+
+function migrateDatabase(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL DEFAULT 'user',
+      password_hash TEXT,
+      created_at TEXT NOT NULL,
+      disabled_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      scopes_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT,
+      expires_at TEXT,
+      revoked_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
+
+    CREATE TABLE IF NOT EXISTS minecraft_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL,
+      minecraft_uuid TEXT NOT NULL UNIQUE,
+      minecraft_username TEXT NOT NULL,
+      owner_user_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT NOT NULL DEFAULT '',
+      ban_reason TEXT,
+      banned_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_minecraft_accounts_status ON minecraft_accounts(status);
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      api_key_id INTEGER,
+      action TEXT NOT NULL,
+      ip TEXT,
+      user_agent TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS dashboard_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_token_hash ON dashboard_sessions(token_hash);
+  `);
+
+  const userColumns = db.prepare('PRAGMA table_info(users)').all().map((column) => column.name);
+  if (!userColumns.includes('password_hash')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+  }
+
+  const accountColumns = db.prepare('PRAGMA table_info(minecraft_accounts)').all().map((column) => column.name);
+  if (!accountColumns.includes('last_seen_at')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN last_seen_at TEXT');
+  }
+  if (!accountColumns.includes('last_connected_at')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN last_connected_at TEXT');
+  }
+  if (!accountColumns.includes('client_version')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN client_version TEXT');
+  }
+}
+
+function createUser(db, { username, role = 'user' }) {
+  const cleanUsername = String(username || '').trim();
+  if (!cleanUsername) throw new Error('Username is required');
+
+  const existing = db.prepare('SELECT * FROM users WHERE username = ?').get(cleanUsername);
+  if (existing) return existing;
+
+  const result = db.prepare(`
+    INSERT INTO users (username, role, created_at)
+    VALUES (?, ?, ?)
+  `).run(cleanUsername, role, nowIso());
+
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const key = crypto.scryptSync(String(password), salt, 64).toString('base64url');
+  return `scrypt$${salt}$${key}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const parts = String(storedHash || '').split('$');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+  const [, salt, expected] = parts;
+  const actual = crypto.scryptSync(String(password), salt, 64);
+  const expectedBuffer = Buffer.from(expected, 'base64url');
+  if (actual.length !== expectedBuffer.length) return false;
+  return crypto.timingSafeEqual(actual, expectedBuffer);
+}
+
+function setUserPassword(db, userId, password) {
+  const cleanPassword = String(password || '');
+  if (cleanPassword.length < 8) throw new Error('Password must be at least 8 characters');
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(cleanPassword), userId);
+}
+
+function listDashboardUsers(db) {
+  return db.prepare(`
+    SELECT
+      id,
+      username,
+      role,
+      password_hash IS NOT NULL AS has_password,
+      created_at,
+      disabled_at
+    FROM users
+    ORDER BY id ASC
+  `).all();
+}
+
+function getDashboardUserById(db, userId) {
+  return db.prepare(`
+    SELECT
+      id,
+      username,
+      role,
+      password_hash IS NOT NULL AS has_password,
+      created_at,
+      disabled_at
+    FROM users
+    WHERE id = ?
+  `).get(userId);
+}
+
+function updateUserRole(db, userId, role) {
+  const cleanRole = String(role || '').trim().toLowerCase();
+  if (!DASHBOARD_ROLES.has(cleanRole)) throw new Error('Invalid dashboard role');
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(cleanRole, userId);
+}
+
+function deleteDashboardUser(db, userId) {
+  db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+}
+
+function authenticateUserPassword(db, username, password) {
+  const user = db.prepare(`
+    SELECT id, username, role, password_hash, disabled_at
+    FROM users
+    WHERE username = ?
+  `).get(String(username || '').trim());
+
+  if (!user || user.disabled_at || !user.password_hash) return null;
+  if (!verifyPassword(password, user.password_hash)) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+  };
+}
+
+function countPasswordUsers(db) {
+  return db.prepare('SELECT COUNT(*) AS count FROM users WHERE password_hash IS NOT NULL AND disabled_at IS NULL').get().count;
+}
+
+function createDashboardSession(db, userId, { rawToken = null, expiresAt = null } = {}) {
+  if (!userId) throw new Error('userId is required');
+  const token = rawToken || `dash_${crypto.randomBytes(32).toString('base64url')}`;
+  const createdAt = nowIso();
+  const expires = expiresAt || new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const result = db.prepare(`
+    INSERT INTO dashboard_sessions (user_id, token_hash, created_at, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).run(userId, hashToken(token), createdAt, expires);
+
+  return {
+    id: Number(result.lastInsertRowid),
+    userId,
+    rawToken: token,
+    expiresAt: expires,
+  };
+}
+
+function authenticateDashboardSession(db, rawToken) {
+  const token = String(rawToken || '').trim();
+  if (!token) return null;
+  const row = db.prepare(`
+    SELECT
+      dashboard_sessions.*,
+      users.username,
+      users.role,
+      users.disabled_at
+    FROM dashboard_sessions
+    JOIN users ON users.id = dashboard_sessions.user_id
+    WHERE dashboard_sessions.token_hash = ?
+  `).get(hashToken(token));
+
+  if (!row || row.revoked_at || row.disabled_at) return null;
+  if (row.expires_at <= nowIso()) return null;
+  return {
+    session: {
+      id: row.id,
+      expiresAt: row.expires_at,
+    },
+    user: {
+      id: row.user_id,
+      username: row.username,
+      role: row.role,
+    },
+  };
+}
+
+function revokeDashboardSession(db, rawToken) {
+  const token = String(rawToken || '').trim();
+  if (!token) return;
+  db.prepare('UPDATE dashboard_sessions SET revoked_at = ? WHERE token_hash = ?').run(nowIso(), hashToken(token));
+}
+
+function createApiKey(db, {
+  userId,
+  name,
+  scopes = [],
+  rawKey = null,
+  expiresAt = null,
+}) {
+  if (!userId) throw new Error('userId is required');
+  const cleanName = String(name || '').trim();
+  if (!cleanName) throw new Error('API key name is required');
+
+  const key = rawKey || `hpx_live_${crypto.randomBytes(24).toString('base64url')}`;
+  const prefix = key.slice(0, API_KEY_PREFIX_LENGTH);
+  const result = db.prepare(`
+    INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes_json, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    userId,
+    cleanName,
+    hashApiKey(key),
+    prefix,
+    JSON.stringify(scopes),
+    nowIso(),
+    expiresAt
+  );
+
+  return {
+    id: Number(result.lastInsertRowid),
+    userId,
+    name: cleanName,
+    prefix,
+    scopes,
+    rawKey: key,
+  };
+}
+
+function authenticateApiKey(db, rawKey) {
+  const key = String(rawKey || '').trim();
+  if (!key) return null;
+
+  const prefix = key.slice(0, API_KEY_PREFIX_LENGTH);
+  const rows = db.prepare(`
+    SELECT
+      api_keys.*,
+      users.username,
+      users.role,
+      users.disabled_at
+    FROM api_keys
+    JOIN users ON users.id = api_keys.user_id
+    WHERE api_keys.key_prefix = ?
+  `).all(prefix);
+  const expectedHash = hashApiKey(key);
+  const now = nowIso();
+
+  for (const row of rows) {
+    if (!timingSafeEqualHex(row.key_hash, expectedHash)) continue;
+    if (row.revoked_at || row.disabled_at) return null;
+    if (row.expires_at && row.expires_at <= now) return null;
+
+    db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(now, row.id);
+    return {
+      user: {
+        id: row.user_id,
+        username: row.username,
+        role: row.role,
+      },
+      apiKey: {
+        id: row.id,
+        name: row.name,
+        prefix: row.key_prefix,
+        scopes: parseScopes(row.scopes_json),
+      },
+    };
+  }
+
+  return null;
+}
+
+function revokeApiKey(db, apiKeyId) {
+  db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(nowIso(), apiKeyId);
+}
+
+function listApiKeys(db) {
+  return db.prepare(`
+    SELECT
+      api_keys.id,
+      api_keys.user_id,
+      users.username,
+      api_keys.name,
+      api_keys.key_prefix,
+      api_keys.scopes_json,
+      api_keys.created_at,
+      api_keys.last_used_at,
+      api_keys.expires_at,
+      api_keys.revoked_at
+    FROM api_keys
+    JOIN users ON users.id = api_keys.user_id
+    ORDER BY api_keys.created_at DESC
+  `).all().map((row) => ({
+    ...row,
+    scopes: parseScopes(row.scopes_json),
+    scopes_json: undefined,
+  }));
+}
+
+function countActiveApiKeys(db) {
+  return db.prepare('SELECT COUNT(*) AS count FROM api_keys WHERE revoked_at IS NULL').get().count;
+}
+
+function createMinecraftAccount(db, {
+  label,
+  minecraftUuid,
+  minecraftUsername,
+  ownerUserId = null,
+  notes = '',
+}) {
+  const cleanLabel = String(label || '').trim();
+  const cleanUuid = String(minecraftUuid || '').trim();
+  const cleanUsername = String(minecraftUsername || '').trim();
+  if (!cleanLabel) throw new Error('Account label is required');
+  if (!cleanUuid) throw new Error('Minecraft UUID is required');
+  if (!cleanUsername) throw new Error('Minecraft username is required');
+
+  const timestamp = nowIso();
+  const result = db.prepare(`
+    INSERT INTO minecraft_accounts (
+      label,
+      minecraft_uuid,
+      minecraft_username,
+      owner_user_id,
+      status,
+      notes,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+  `).run(cleanLabel, cleanUuid, cleanUsername, ownerUserId, String(notes || ''), timestamp, timestamp);
+
+  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindowMs = DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS } = {}) {
+  if (
+    account.status === 'active'
+    && account.last_seen_at
+    && now - Date.parse(account.last_seen_at) > heartbeatWindowMs
+  ) {
+    return { ...account, status: 'offline' };
+  }
+  return account;
+}
+
+function listMinecraftAccounts(db, options = {}) {
+  return db.prepare(`
+    SELECT
+      minecraft_accounts.*,
+      users.username AS owner_username
+    FROM minecraft_accounts
+    LEFT JOIN users ON users.id = minecraft_accounts.owner_user_id
+    ORDER BY minecraft_accounts.created_at DESC
+  `).all().map((account) => applyComputedAccountStatus(account, options));
+}
+
+function normalizeMinecraftUuid(uuid) {
+  const cleanUuid = String(uuid || '').replace(/-/g, '').trim().toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(cleanUuid)) throw new Error('Invalid Minecraft UUID');
+  return [
+    cleanUuid.slice(0, 8),
+    cleanUuid.slice(8, 12),
+    cleanUuid.slice(12, 16),
+    cleanUuid.slice(16, 20),
+    cleanUuid.slice(20),
+  ].join('-');
+}
+
+function upsertMinecraftAccountFromMod(db, {
+  minecraftUuid,
+  minecraftUsername,
+  ownerUserId,
+  clientVersion = null,
+}) {
+  const cleanUuid = normalizeMinecraftUuid(minecraftUuid);
+  const cleanUsername = String(minecraftUsername || '').trim();
+  if (!cleanUsername) throw new Error('Minecraft username is required');
+  if (!ownerUserId) throw new Error('ownerUserId is required');
+
+  const timestamp = nowIso();
+  const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE minecraft_uuid = ?').get(cleanUuid);
+  if (existing) {
+    db.prepare(`
+      UPDATE minecraft_accounts
+      SET label = ?,
+          minecraft_username = ?,
+          owner_user_id = ?,
+          status = CASE WHEN status = 'banned' THEN status ELSE 'active' END,
+          last_connected_at = ?,
+          last_seen_at = ?,
+          client_version = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(cleanUsername, cleanUsername, ownerUserId, timestamp, timestamp, clientVersion, timestamp, existing.id);
+    return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(existing.id);
+  }
+
+  const result = db.prepare(`
+    INSERT INTO minecraft_accounts (
+      label,
+      minecraft_uuid,
+      minecraft_username,
+      owner_user_id,
+      status,
+      notes,
+      last_connected_at,
+      last_seen_at,
+      client_version,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, 'active', '', ?, ?, ?, ?, ?)
+  `).run(cleanUsername, cleanUuid, cleanUsername, ownerUserId, timestamp, timestamp, clientVersion, timestamp, timestamp);
+
+  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function recordMinecraftAccountHeartbeat(db, accountId) {
+  const timestamp = nowIso();
+  db.prepare(`
+    UPDATE minecraft_accounts
+    SET last_seen_at = ?,
+        status = CASE WHEN status = 'banned' THEN status ELSE 'active' END,
+        updated_at = ?
+    WHERE id = ?
+  `).run(timestamp, timestamp, accountId);
+
+  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+}
+
+function updateMinecraftAccountStatus(db, accountId, { status, banReason = null }) {
+  const allowedStatuses = new Set(['active', 'offline', 'locked', 'banned']);
+  const cleanStatus = String(status || '').trim().toLowerCase();
+  if (!allowedStatuses.has(cleanStatus)) throw new Error('Invalid account status');
+
+  const bannedAt = cleanStatus === 'banned' ? nowIso() : null;
+  db.prepare(`
+    UPDATE minecraft_accounts
+    SET status = ?, ban_reason = ?, banned_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(cleanStatus, banReason, bannedAt, nowIso(), accountId);
+}
+
+function deleteMinecraftAccount(db, accountId) {
+  db.prepare('DELETE FROM minecraft_accounts WHERE id = ?').run(accountId);
+}
+
+function writeAuditLog(db, {
+  userId = null,
+  apiKeyId = null,
+  action,
+  ip = null,
+  userAgent = null,
+  metadata = {},
+}) {
+  db.prepare(`
+    INSERT INTO audit_logs (user_id, api_key_id, action, ip, user_agent, metadata_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(userId, apiKeyId, action, ip, userAgent, JSON.stringify(metadata || {}), nowIso());
+}
+
+module.exports = {
+  createDatabase,
+  migrateDatabase,
+  createUser,
+  setUserPassword,
+  listDashboardUsers,
+  getDashboardUserById,
+  updateUserRole,
+  deleteDashboardUser,
+  authenticateUserPassword,
+  countPasswordUsers,
+  createDashboardSession,
+  authenticateDashboardSession,
+  revokeDashboardSession,
+  createApiKey,
+  authenticateApiKey,
+  revokeApiKey,
+  listApiKeys,
+  countActiveApiKeys,
+  createMinecraftAccount,
+  listMinecraftAccounts,
+  upsertMinecraftAccountFromMod,
+  recordMinecraftAccountHeartbeat,
+  updateMinecraftAccountStatus,
+  deleteMinecraftAccount,
+  writeAuditLog,
+};

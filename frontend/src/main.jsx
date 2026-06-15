@@ -1,0 +1,1120 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import './styles.css';
+
+const TOKEN_STORAGE_KEY = 'auctionApiToken';
+
+const colorMap = {
+  '0': '#111111',
+  '1': '#6f7fa6',
+  '2': '#6f946f',
+  '3': '#78999a',
+  '4': '#a06c6c',
+  '5': '#94759a',
+  '6': '#b79b61',
+  '7': '#a7abb0',
+  '8': '#6e737a',
+  '9': '#8ea2c6',
+  a: '#7aa17d',
+  b: '#91aeb0',
+  c: '#c06f6f',
+  d: '#b8a6c9',
+  e: '#c4b878',
+  f: '#edf0f3',
+};
+
+const romanMap = {
+  i: 1,
+  ii: 2,
+  iii: 3,
+  iv: 4,
+  v: 5,
+  vi: 6,
+  vii: 7,
+  viii: 8,
+  ix: 9,
+  x: 10,
+};
+
+const defaultAuctionForm = {
+  itemName: 'Final Destination Chestplate',
+  rarity: 'any',
+  recomb: 'no',
+  stars: 'any',
+  minKills: '25000',
+  maxKills: '30000',
+  minPrice: '',
+  maxPrice: '',
+  enchants: '',
+  sort: 'price_asc',
+};
+
+const defaultAccountForm = {
+  label: '',
+  minecraftUuid: '',
+  minecraftUsername: '',
+  notes: '',
+};
+
+const defaultKeyForm = {
+  userId: '',
+  name: '',
+  scopes: ['auction:read', 'mod:connect'],
+};
+
+const defaultUserForm = {
+  username: '',
+  password: '',
+  role: 'viewer',
+};
+
+function authHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function apiFetch(path, token, options = {}) {
+  const headers = {
+    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...authHeaders(token),
+    ...(options.headers || {}),
+  };
+  const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.error || `HTTP ${response.status}`);
+  }
+  return body;
+}
+
+function tokenQuery(path, token) {
+  if (!token) return path;
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function formatNumber(num) {
+  return Number(num || 0).toLocaleString();
+}
+
+function formatPrice(price) {
+  const value = Number(price || 0);
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return formatNumber(value);
+}
+
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return 'Ended';
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
+function parseNumber(value) {
+  const parsed = Number(String(value || '').trim());
+  return Number.isFinite(parsed) && String(value || '').trim() ? parsed : null;
+}
+
+function parseEnchants(value) {
+  const enchants = {};
+  const chunks = String(value || '').split(',').map((chunk) => chunk.trim()).filter(Boolean);
+  for (const chunk of chunks) {
+    const match = chunk.match(/^(.+?)\s+([ivx]+|\d+)$/i);
+    if (!match) continue;
+    const name = match[1].trim();
+    const levelText = match[2].toLowerCase();
+    const level = romanMap[levelText] || Number(levelText);
+    if (name && Number.isFinite(level)) enchants[name] = level;
+  }
+  return enchants;
+}
+
+function buildFilters(form) {
+  const filters = {
+    category: 'armor',
+    enchants: parseEnchants(form.enchants),
+  };
+  if (form.rarity !== 'any') filters.rarity = [form.rarity];
+  if (form.recomb !== 'any') filters.recomb = form.recomb === 'yes';
+  const minKills = parseNumber(form.minKills);
+  const maxKills = parseNumber(form.maxKills);
+  const minPrice = parseNumber(form.minPrice);
+  const maxPrice = parseNumber(form.maxPrice);
+  if (minKills != null) filters.minKills = minKills;
+  if (maxKills != null) filters.maxKills = maxKills;
+  if (minPrice != null) filters.minPrice = minPrice;
+  if (maxPrice != null) filters.maxPrice = maxPrice;
+  if (form.stars !== 'any') filters.minStars = Number(form.stars);
+  if (Object.keys(filters.enchants).length === 0) delete filters.enchants;
+  return filters;
+}
+
+function buildRecommendationAttributes(form) {
+  const minKills = parseNumber(form.minKills);
+  const maxKills = parseNumber(form.maxKills);
+  const attributes = {
+    enchants: parseEnchants(form.enchants),
+    recomb: form.recomb === 'yes',
+  };
+  if (minKills != null) attributes.minKills = minKills;
+  if (maxKills != null) attributes.maxKills = maxKills;
+  if (minKills != null && maxKills != null) attributes.kills = Math.round((minKills + maxKills) / 2);
+  else if (minKills != null) attributes.kills = minKills;
+  if (form.rarity !== 'any') attributes.rarity = form.rarity;
+  if (form.stars !== 'any') attributes.stars = Number(form.stars);
+  if (Object.keys(attributes.enchants).length === 0) delete attributes.enchants;
+  return attributes;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function mineatarFaceUrl(uuid) {
+  const cleanUuid = String(uuid || '').replace(/-/g, '').trim();
+  if (!cleanUuid) return '';
+  return `https://api.mineatar.io/face/${encodeURIComponent(cleanUuid)}?scale=8&overlay=true&format=png`;
+}
+
+function minecraftColorToHTML(text) {
+  const tokens = String(text || '').split('Â§');
+  let html = escapeHtml(tokens[0] || '');
+  let color = null;
+  let bold = false;
+  let italic = false;
+
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token) continue;
+    const code = token[0].toLowerCase();
+    const rest = escapeHtml(token.slice(1));
+    if (colorMap[code]) {
+      color = colorMap[code];
+      bold = false;
+      italic = false;
+    } else if (code === 'l') {
+      bold = true;
+    } else if (code === 'o') {
+      italic = true;
+    } else if (code === 'r') {
+      color = null;
+      bold = false;
+      italic = false;
+    }
+
+    const styles = [];
+    if (color) styles.push(`color:${color}`);
+    if (bold) styles.push('font-weight:800');
+    if (italic) styles.push('font-style:italic');
+    html += styles.length ? `<span style="${styles.join(';')}">${rest}</span>` : rest;
+  }
+
+  return html.replace(/\n/g, '<br>');
+}
+
+function Field({ label, children, className = '' }) {
+  return (
+    <label className={`field ${className}`}>
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function App() {
+  const [activeView, setActiveView] = useState('auctions');
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY) || '');
+
+  const updateToken = useCallback((value) => {
+    setToken(value);
+    localStorage.setItem(TOKEN_STORAGE_KEY, value.trim());
+  }, []);
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <h1><span>SkyBlock</span> Control</h1>
+          <p className="muted">Auction pricing, API keys, and registered Minecraft accounts</p>
+        </div>
+        <div className="topbar-actions">
+          <nav className="view-tabs" aria-label="Primary views">
+            <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => setActiveView('auctions')}>Auctions</button>
+            <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setActiveView('dashboard')}>Dashboard</button>
+          </nav>
+          {activeView === 'auctions' ? (
+            <input
+              className="token-input"
+              type="password"
+              placeholder="API key for API/mod calls"
+              value={token}
+              onChange={(event) => updateToken(event.target.value)}
+            />
+          ) : null}
+        </div>
+      </header>
+
+      {activeView === 'auctions' ? <AuctionView token={token} /> : <DashboardView />}
+    </main>
+  );
+}
+
+function AuctionView({ token }) {
+  const [form, setForm] = useState(defaultAuctionForm);
+  const [cacheLine, setCacheLine] = useState('Cache not loaded');
+  const [progress, setProgress] = useState(null);
+  const [results, setResults] = useState([]);
+  const [source, setSource] = useState('Waiting');
+  const [recommendation, setRecommendation] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const lowest = results[0] || null;
+  const average = useMemo(() => {
+    if (!results.length) return 0;
+    return Math.round(results.reduce((sum, item) => sum + item.price, 0) / results.length);
+  }, [results]);
+
+  const updateField = useCallback((field, value) => {
+    setForm((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const renderCacheStatus = useCallback((status) => {
+    if (!status.ready) {
+      setCacheLine(status.refreshing ? 'Index refresh running' : 'Cache not loaded');
+      return;
+    }
+    const age = status.ageMs == null ? 'unknown age' : `${Math.max(0, Math.round(status.ageMs / 1000))}s old`;
+    setCacheLine(`${formatNumber(status.indexedBinCount)} BIN auctions indexed from ${status.totalPages} pages, ${age}`);
+  }, []);
+
+  useEffect(() => {
+    apiFetch('/api/index/status', token)
+      .then(renderCacheStatus)
+      .catch((err) => setCacheLine(err.message === 'Unauthorized' ? 'Unauthorized: check API key' : 'Status unavailable'));
+  }, [renderCacheStatus, token]);
+
+  const resolveUsernames = useCallback(async (items) => {
+    const unique = [...new Set(items.map((item) => item.auctioneer).filter(Boolean))].slice(0, 25);
+    if (!unique.length) return;
+    try {
+      const mapping = await apiFetch('/api/usernames', token, {
+        method: 'POST',
+        body: JSON.stringify(unique),
+      });
+      setResults((current) => current.map((item) => ({
+        ...item,
+        sellerName: mapping[item.auctioneer] || item.sellerName,
+      })));
+    } catch (err) {
+      console.error('Username resolution failed:', err);
+    }
+  }, [token]);
+
+  const runSearch = useCallback(async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setSource('Searching');
+    try {
+      const body = await apiFetch('/api/search', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          query: form.itemName.trim(),
+          filters: buildFilters(form),
+          sort: form.sort,
+          limit: 100,
+        }),
+      });
+      const nextResults = body.results || [];
+      setResults(nextResults);
+      setSource(body.source === 'fresh' ? 'Fresh index' : body.source === 'cache' ? 'Cached index' : body.source);
+      renderCacheStatus(body.cache);
+      resolveUsernames(nextResults);
+    } catch (err) {
+      setSource(err.message);
+      setResults([]);
+    } finally {
+      setBusy(false);
+    }
+  }, [form, renderCacheStatus, resolveUsernames, token]);
+
+  const runRecommendation = useCallback(async () => {
+    setBusy(true);
+    setRecommendation({ price: null, detail: 'Calculating' });
+    try {
+      const body = await apiFetch('/api/recommend-bin', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          baseName: form.itemName.trim(),
+          attributes: buildRecommendationAttributes(form),
+          limit: 10,
+        }),
+      });
+      renderCacheStatus(body.cache);
+      if (body.recommendedPrice == null) {
+        setRecommendation({ price: null, detail: body.warnings?.[0] || 'No market data' });
+      } else {
+        const warning = body.warnings?.length ? ` - ${body.warnings.join(' ')}` : '';
+        setRecommendation({
+          price: body.recommendedPrice,
+          detail: `${body.basis.replace(/_/g, ' ')}${warning}`,
+        });
+      }
+    } catch (err) {
+      setRecommendation({ price: null, detail: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }, [form, renderCacheStatus, token]);
+
+  const runRefresh = useCallback(() => {
+    setProgress({ status: 'Connecting', percent: 0 });
+    setBusy(true);
+    const sourceStream = new EventSource(tokenQuery('/api/index/refresh', token));
+    sourceStream.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'status') setProgress({ status: data.message, percent: 0 });
+      if (data.type === 'init') setProgress({ status: `Indexing ${data.totalPages} pages`, percent: 2 });
+      if (data.type === 'progress') {
+        const percent = Math.round((data.completedPages / data.totalPages) * 100);
+        setProgress({ status: `${formatNumber(data.indexedBinCount)} BIN auctions indexed`, percent });
+      }
+      if (data.type === 'done') {
+        renderCacheStatus(data.status);
+        setProgress({ status: data.source === 'cache' ? 'Cache already fresh' : 'Index ready', percent: 100 });
+        setBusy(false);
+        sourceStream.close();
+      }
+      if (data.type === 'error') {
+        setProgress({ status: data.message, percent: 0 });
+        setBusy(false);
+        sourceStream.close();
+      }
+    };
+    sourceStream.onerror = () => {
+      setProgress({ status: 'Refresh connection lost', percent: 0 });
+      setBusy(false);
+      sourceStream.close();
+    };
+  }, [renderCacheStatus, token]);
+
+  return (
+    <>
+      <section className="status-strip">
+        <p className="muted">{cacheLine}</p>
+        <button className="btn secondary" type="button" onClick={runRefresh} disabled={busy}>Refresh Index</button>
+      </section>
+
+      {progress ? (
+        <section className="progress-panel">
+          <div className="progress-meta">
+            <span>{progress.status}</span>
+            <span>{progress.percent}%</span>
+          </div>
+          <div className="progress-track">
+            <div className="progress-bar" style={{ width: `${progress.percent}%` }} />
+          </div>
+        </section>
+      ) : null}
+
+      <section className="control-panel">
+        <form className="search-grid" onSubmit={runSearch}>
+          <Field label="Exact Item" className="item-field">
+            <input value={form.itemName} onChange={(event) => updateField('itemName', event.target.value)} required />
+          </Field>
+          <Field label="Rarity">
+            <select value={form.rarity} onChange={(event) => updateField('rarity', event.target.value)}>
+              <option value="any">Any</option>
+              <option value="LEGENDARY">Legendary</option>
+              <option value="MYTHIC">Mythic</option>
+              <option value="EPIC">Epic</option>
+              <option value="RARE">Rare</option>
+              <option value="UNCOMMON">Uncommon</option>
+              <option value="COMMON">Common</option>
+            </select>
+          </Field>
+          <Field label="Recomb">
+            <select value={form.recomb} onChange={(event) => updateField('recomb', event.target.value)}>
+              <option value="any">Any</option>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+          </Field>
+          <Field label="Stars">
+            <select value={form.stars} onChange={(event) => updateField('stars', event.target.value)}>
+              <option value="any">Any</option>
+              <option value="0">0+</option>
+              <option value="1">1+</option>
+              <option value="2">2+</option>
+              <option value="3">3+</option>
+              <option value="4">4+</option>
+              <option value="5">5+</option>
+            </select>
+          </Field>
+          <Field label="Min Kills">
+            <input type="number" min="0" value={form.minKills} onChange={(event) => updateField('minKills', event.target.value)} />
+          </Field>
+          <Field label="Max Kills">
+            <input type="number" min="0" value={form.maxKills} onChange={(event) => updateField('maxKills', event.target.value)} />
+          </Field>
+          <Field label="Min Price">
+            <input type="number" min="0" value={form.minPrice} onChange={(event) => updateField('minPrice', event.target.value)} placeholder="0" />
+          </Field>
+          <Field label="Max Price">
+            <input type="number" min="0" value={form.maxPrice} onChange={(event) => updateField('maxPrice', event.target.value)} placeholder="Any" />
+          </Field>
+          <Field label="Enchants" className="enchant-field">
+            <input value={form.enchants} onChange={(event) => updateField('enchants', event.target.value)} placeholder="e.g. Growth V, Protection V" />
+          </Field>
+          <Field label="Sort">
+            <select value={form.sort} onChange={(event) => updateField('sort', event.target.value)}>
+              <option value="price_asc">Price Low</option>
+              <option value="price_desc">Price High</option>
+              <option value="kills_desc">Kills High</option>
+              <option value="ending_soon">Ending Soon</option>
+            </select>
+          </Field>
+          <div className="form-actions">
+            <button className="btn primary" type="submit" disabled={busy}>{busy ? 'Working...' : 'Search'}</button>
+            <button className="btn gold" type="button" onClick={runRecommendation} disabled={busy}>Recommend BIN</button>
+          </div>
+        </form>
+      </section>
+
+      <section className="stats-row">
+        <StatCard title="Lowest BIN" value={lowest ? formatPrice(lowest.price) : '---'} detail={lowest ? `${formatNumber(lowest.kills)} kills` : 'No result'} variant="legendary" />
+        <StatCard title="Average BIN" value={average ? formatPrice(average) : '---'} detail="Filtered listings" variant="mythic" />
+        <StatCard title="Matches" value={formatNumber(results.length)} detail={source} variant="rare" />
+        <StatCard title="Recommended BIN" value={recommendation?.price ? formatPrice(recommendation.price) : '---'} detail={recommendation?.detail || 'Run recommendation'} variant="recommendation" />
+      </section>
+
+      <section className="results-panel">
+        <div className="section-heading">
+          <h2>Active BIN Listings</h2>
+          <span className="pill">{results.length} result{results.length === 1 ? '' : 's'}</span>
+        </div>
+        <AuctionTable results={results} onSelect={setSelectedItem} />
+      </section>
+
+      {selectedItem ? <TooltipModal item={selectedItem} onClose={() => setSelectedItem(null)} /> : null}
+    </>
+  );
+}
+
+function StatCard({ title, value, detail, variant }) {
+  return (
+    <article className={`stat-card rarity-${variant}`}>
+      <span>{title}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
+}
+
+function AuctionTable({ results, onSelect }) {
+  if (!results.length) {
+    return (
+      <div className="table-wrap">
+        <table>
+          <tbody><tr><td className="empty-cell">No matching BIN listings</td></tr></tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Price</th>
+            <th>Rarity</th>
+            <th>Kills</th>
+            <th>Stars</th>
+            <th>Recomb</th>
+            <th>Enchants</th>
+            <th>Seller</th>
+            <th>Ends</th>
+            <th>Name</th>
+          </tr>
+        </thead>
+        <tbody>
+          {results.map((item, index) => {
+            const enchantText = Object.entries(item.enchants || {})
+              .slice(0, 3)
+              .map(([name, level]) => `${name} ${level}`)
+              .join(', ') || 'None';
+            return (
+              <tr key={item.uuid || index} onClick={() => onSelect(item)}>
+                <td className="muted">#{index + 1}</td>
+                <td className="price">{formatPrice(item.price)} <small>{formatNumber(item.price)}</small></td>
+                <td><span className={`rarity ${String(item.rarity).toLowerCase().replace(/\s+/g, '-')}`}>{item.rarity}</span></td>
+                <td>{formatNumber(item.kills)}</td>
+                <td className="stars">{item.stars > 0 ? 'âœª'.repeat(item.stars) : 'None'}</td>
+                <td>{item.recomb ? <span className="badge mythic">Yes</span> : <span className="badge">No</span>}</td>
+                <td>{enchantText}</td>
+                <td>{item.sellerName || `${String(item.auctioneer || '').slice(0, 8)}...`}</td>
+                <td>{formatDuration(item.endsAt - Date.now())}</td>
+                <td className="item-name">{item.displayName}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TooltipModal({ item, onClose }) {
+  return (
+    <div className="modal">
+      <button className="modal-scrim" type="button" aria-label="Close item lore" onClick={onClose} />
+      <section className="mc-tooltip">
+        <div className="tooltip-head">
+          <strong className={`rarity ${String(item.rarity).toLowerCase().replace(/\s+/g, '-')}`}>{item.displayName}</strong>
+          <button type="button" onClick={onClose}>x</button>
+        </div>
+        <div className="tooltip-lore" dangerouslySetInnerHTML={{ __html: minecraftColorToHTML(item.raw_lore || item.cleanLore || '') }} />
+        <footer className="tooltip-footer">
+          <span>{formatNumber(item.price)} coins</span>
+          <span>{item.sellerName || item.auctioneer}</span>
+          <span>{formatDuration(item.endsAt - Date.now())}</span>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function DashboardView() {
+  const [me, setMe] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [apiKeys, setApiKeys] = useState([]);
+  const [dashboardUsers, setDashboardUsers] = useState([]);
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [accountForm, setAccountForm] = useState(defaultAccountForm);
+  const [keyForm, setKeyForm] = useState(defaultKeyForm);
+  const [userForm, setUserForm] = useState(defaultUserForm);
+  const [statusMessage, setStatusMessage] = useState('Log in to access the dashboard');
+  const [issuedKey, setIssuedKey] = useState(null);
+  const [statusDrafts, setStatusDrafts] = useState({});
+  const [roleDrafts, setRoleDrafts] = useState({});
+
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [meBody, accountsBody] = await Promise.all([
+        apiFetch('/api/dashboard/me', null),
+        apiFetch('/api/dashboard/accounts', null),
+      ]);
+      const keysBody = meBody.user.role === 'owner'
+        ? await apiFetch('/api/dashboard/api-keys', null)
+        : { apiKeys: [] };
+      const usersBody = meBody.user.role === 'owner'
+        ? await apiFetch('/api/dashboard/users', null)
+        : { users: [] };
+      setMe(meBody.user);
+      setAccounts(accountsBody.accounts || []);
+      setApiKeys(keysBody.apiKeys || []);
+      setDashboardUsers(usersBody.users || []);
+      setStatusMessage('Dashboard loaded');
+    } catch (err) {
+      setMe(null);
+      setAccounts([]);
+      setApiKeys([]);
+      setDashboardUsers([]);
+      setStatusMessage(err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  const login = useCallback(async (event) => {
+    event.preventDefault();
+    try {
+      const body = await apiFetch('/api/dashboard/login', null, {
+        method: 'POST',
+        body: JSON.stringify(loginForm),
+      });
+      setMe(body.user);
+      setLoginForm({ username: '', password: '' });
+      setStatusMessage('Dashboard loaded');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard, loginForm]);
+
+  const logout = useCallback(async () => {
+    try {
+      await apiFetch('/api/dashboard/logout', null, { method: 'POST' });
+    } catch (err) {
+      console.error('Logout failed:', err);
+    }
+    setMe(null);
+    setAccounts([]);
+    setApiKeys([]);
+    setDashboardUsers([]);
+    setIssuedKey(null);
+    setStatusMessage('Logged out');
+  }, []);
+
+  const updateAccountForm = useCallback((field, value) => {
+    setAccountForm((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const updateKeyForm = useCallback((field, value) => {
+    setKeyForm((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const updateUserForm = useCallback((field, value) => {
+    setUserForm((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const toggleScope = useCallback((scope) => {
+    setKeyForm((current) => {
+      const scopeSet = new Set(current.scopes);
+      if (scopeSet.has(scope)) scopeSet.delete(scope);
+      else scopeSet.add(scope);
+      return { ...current, scopes: [...scopeSet] };
+    });
+  }, []);
+
+  const createAccount = useCallback(async (event) => {
+    event.preventDefault();
+    try {
+      await apiFetch('/api/dashboard/accounts', null, {
+        method: 'POST',
+        body: JSON.stringify(accountForm),
+      });
+      setAccountForm(defaultAccountForm);
+      setStatusMessage('Account registered');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [accountForm, loadDashboard]);
+
+  const createKey = useCallback(async (event) => {
+    event.preventDefault();
+    try {
+      if (!keyForm.userId) {
+        setStatusMessage('Select a dashboard user for this API key');
+        return;
+      }
+      const body = await apiFetch('/api/dashboard/api-keys', null, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...keyForm,
+          userId: Number(keyForm.userId),
+        }),
+      });
+      setIssuedKey(body.apiKey);
+      setKeyForm(defaultKeyForm);
+      setStatusMessage('API key created. Copy it now; it will not be shown again.');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [keyForm, loadDashboard]);
+
+  const createDashboardUser = useCallback(async (event) => {
+    event.preventDefault();
+    try {
+      await apiFetch('/api/dashboard/users', null, {
+        method: 'POST',
+        body: JSON.stringify(userForm),
+      });
+      setUserForm(defaultUserForm);
+      setStatusMessage('Dashboard user created');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard, userForm]);
+
+  const updateDashboardUserRole = useCallback(async (user) => {
+    const nextRole = roleDrafts[user.id] || user.role;
+    try {
+      await apiFetch('/api/dashboard/users/role', null, {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user.id,
+          role: nextRole,
+        }),
+      });
+      setStatusMessage('Dashboard user role updated');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard, roleDrafts]);
+
+  const deleteMinecraftAccount = useCallback(async (account) => {
+    const confirmed = window.confirm(`Delete Minecraft account "${account.minecraft_username}" from the dashboard?`);
+    if (!confirmed) return;
+    try {
+      await apiFetch('/api/dashboard/accounts/delete', null, {
+        method: 'POST',
+        body: JSON.stringify({ accountId: account.id }),
+      });
+      setStatusMessage('Minecraft account deleted');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
+  const deleteDashboardUser = useCallback(async (user) => {
+    const confirmed = window.confirm(`Delete dashboard user "${user.username}"?`);
+    if (!confirmed) return;
+    try {
+      await apiFetch('/api/dashboard/users/delete', null, {
+        method: 'POST',
+        body: JSON.stringify({ userId: user.id }),
+      });
+      setStatusMessage('Dashboard user deleted');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
+  const revokeKey = useCallback(async (apiKeyId) => {
+    try {
+      await apiFetch('/api/dashboard/api-keys/revoke', null, {
+        method: 'POST',
+        body: JSON.stringify({ apiKeyId }),
+      });
+      setStatusMessage('API key revoked');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
+  const updateAccountStatus = useCallback(async (accountId) => {
+    const draft = statusDrafts[accountId] || {};
+    try {
+      await apiFetch('/api/dashboard/accounts/status', null, {
+        method: 'POST',
+        body: JSON.stringify({
+          accountId,
+          status: draft.status || 'active',
+          banReason: draft.banReason || null,
+        }),
+      });
+      setStatusMessage('Account status updated');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard, statusDrafts]);
+
+  const connectAccount = useCallback((account) => {
+    setStatusMessage(`Connect requested for ${account.minecraft_username}. Mod WebSocket control is not wired yet.`);
+  }, []);
+
+  if (!me) {
+    return (
+      <>
+        <section className="status-strip">
+          <p className="muted">{statusMessage}</p>
+        </section>
+        <section className="login-panel">
+          <div>
+            <h2>Dashboard Login</h2>
+            <p className="muted">Use your dashboard username and password. API keys are only for mods and API requests.</p>
+          </div>
+          <form className="stack-form" onSubmit={login}>
+            <Field label="Username">
+              <input value={loginForm.username} onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))} autoComplete="username" required />
+            </Field>
+            <Field label="Password">
+              <input type="password" value={loginForm.password} onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))} autoComplete="current-password" required />
+            </Field>
+            <button className="btn primary" type="submit">Log In</button>
+          </form>
+        </section>
+      </>
+    );
+  }
+
+  const canManageUsers = me.role === 'owner';
+  const canManageAccounts = me.role === 'owner' || me.role === 'manager';
+
+  return (
+    <>
+      <section className="status-strip">
+        <p className="muted">{me ? `Signed in as ${me.username} (${me.role})` : statusMessage}</p>
+        <div className="inline-actions">
+          <button className="btn secondary" type="button" onClick={loadDashboard}>Reload</button>
+          <button className="btn secondary" type="button" onClick={logout}>Log Out</button>
+        </div>
+      </section>
+
+      <section className="dashboard-grid">
+        {canManageAccounts ? (
+          <div className="control-panel">
+          <div className="section-heading">
+            <h2>Register Minecraft Account</h2>
+          </div>
+          <form className="stack-form" onSubmit={createAccount}>
+            <Field label="Label">
+              <input value={accountForm.label} onChange={(event) => updateAccountForm('label', event.target.value)} placeholder="RDP Main" required />
+            </Field>
+            <Field label="Minecraft UUID">
+              <input value={accountForm.minecraftUuid} onChange={(event) => updateAccountForm('minecraftUuid', event.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
+            </Field>
+            <Field label="Username">
+              <input value={accountForm.minecraftUsername} onChange={(event) => updateAccountForm('minecraftUsername', event.target.value)} placeholder="PlayerName" required />
+            </Field>
+            <Field label="Notes">
+              <textarea value={accountForm.notes} onChange={(event) => updateAccountForm('notes', event.target.value)} placeholder="Owner, use case, or device notes" />
+            </Field>
+            <button className="btn primary" type="submit">Add Account</button>
+          </form>
+        </div>
+        ) : null}
+
+        {canManageUsers ? (
+          <div className="control-panel">
+            <div className="section-heading">
+              <h2>Create Dashboard User</h2>
+            </div>
+            <form className="stack-form" onSubmit={createDashboardUser}>
+              <Field label="Username">
+                <input value={userForm.username} onChange={(event) => updateUserForm('username', event.target.value)} placeholder="friend-name" required />
+              </Field>
+              <Field label="Password">
+                <input type="password" value={userForm.password} onChange={(event) => updateUserForm('password', event.target.value)} placeholder="Minimum 8 characters" required />
+              </Field>
+              <Field label="Role">
+                <select value={userForm.role} onChange={(event) => updateUserForm('role', event.target.value)}>
+                  <option value="viewer">Viewer</option>
+                  <option value="manager">Manager</option>
+                  <option value="owner">Owner</option>
+                </select>
+              </Field>
+              <button className="btn primary" type="submit">Create User</button>
+            </form>
+          </div>
+        ) : null}
+
+        {canManageUsers ? (
+          <div className="control-panel">
+          <div className="section-heading">
+            <h2>Create API Key</h2>
+          </div>
+          <form className="stack-form" onSubmit={createKey}>
+            <Field label="Dashboard User">
+              <select value={keyForm.userId} onChange={(event) => updateKeyForm('userId', event.target.value)} required>
+                <option value="">Select user</option>
+                {dashboardUsers.map((user) => (
+                  <option key={user.id} value={user.id}>{user.username} ({user.role})</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Key Name">
+              <input value={keyForm.name} onChange={(event) => updateKeyForm('name', event.target.value)} placeholder="Friend mod key" required />
+            </Field>
+            <div className="scope-grid">
+              {['auction:read', 'accounts:read', 'accounts:write', 'mod:connect', 'admin'].map((scope) => (
+                <label key={scope} className="scope-check">
+                  <input type="checkbox" checked={keyForm.scopes.includes(scope)} onChange={() => toggleScope(scope)} />
+                  <span>{scope}</span>
+                </label>
+              ))}
+            </div>
+            <button className="btn gold" type="submit">Create Key</button>
+          </form>
+          {issuedKey ? (
+            <div className="issued-key">
+              <span>New key</span>
+              <code>{issuedKey.rawKey}</code>
+            </div>
+          ) : null}
+        </div>
+        ) : null}
+      </section>
+
+      {canManageUsers ? (
+        <section className="results-panel">
+          <div className="section-heading">
+            <h2>Dashboard Users</h2>
+            <span className="pill">{dashboardUsers.length} users</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Role</th>
+                  <th>Password</th>
+                  <th>Created</th>
+                  <th>Assign Role</th>
+                  <th>Remove</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dashboardUsers.length ? dashboardUsers.map((user) => {
+                  const roleDraft = roleDrafts[user.id] || user.role;
+                  return (
+                    <tr key={user.id}>
+                      <td>{user.username}</td>
+                      <td><span className={`status-badge ${user.role === 'owner' ? 'locked' : user.role === 'manager' ? 'active' : 'offline'}`}>{user.role}</span></td>
+                      <td>{user.has_password ? 'Set' : 'Missing'}</td>
+                      <td>{user.created_at}</td>
+                      <td className="role-controls">
+                        <select value={roleDraft} onChange={(event) => setRoleDrafts((current) => ({ ...current, [user.id]: event.target.value }))}>
+                          <option value="viewer">viewer</option>
+                          <option value="manager">manager</option>
+                          <option value="owner">owner</option>
+                        </select>
+                        <button className="btn secondary compact" type="button" onClick={() => updateDashboardUserRole(user)}>Save</button>
+                      </td>
+                      <td>
+                        <button
+                          className="btn danger compact"
+                          type="button"
+                          disabled={user.id === me.id}
+                          onClick={() => deleteDashboardUser(user)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                }) : <tr><td className="empty-cell" colSpan="6">No dashboard users found</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="results-panel">
+        <div className="section-heading">
+          <h2>Minecraft Accounts</h2>
+          <span className="pill">{accounts.length} registered</span>
+        </div>
+        {accounts.length ? (
+          <div className="account-grid">
+            {accounts.map((account) => {
+              const draft = statusDrafts[account.id] || { status: account.status, banReason: account.ban_reason || '' };
+              return (
+                <article className="account-card" key={account.id}>
+                  <div className="account-card-head">
+                    <img
+                      className="account-avatar"
+                      src={mineatarFaceUrl(account.minecraft_uuid)}
+                      alt={`${account.minecraft_username} Minecraft skin face`}
+                      loading="lazy"
+                    />
+                    <div className="account-identity">
+                      <h3>{account.minecraft_username}</h3>
+                      <span>{account.label}</span>
+                    </div>
+                    <span className={`status-dot ${account.status}`} title={account.status} />
+                  </div>
+
+                  <dl className="account-meta">
+                    <div>
+                      <dt>Owner</dt>
+                      <dd>{account.owner_username || 'Unassigned'}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd><span className={`status-badge ${account.status}`}>{account.status}</span></dd>
+                    </div>
+                    <div className="uuid-row">
+                      <dt>UUID</dt>
+                      <dd>{account.minecraft_uuid}</dd>
+                    </div>
+                    <div>
+                      <dt>Notes</dt>
+                      <dd>{account.notes || account.ban_reason || 'None'}</dd>
+                    </div>
+                  </dl>
+
+                  {canManageAccounts ? (
+                    <div className="account-controls">
+                      <select value={draft.status} onChange={(event) => setStatusDrafts((current) => ({ ...current, [account.id]: { ...draft, status: event.target.value } }))}>
+                        <option value="active">active</option>
+                        <option value="offline">offline</option>
+                        <option value="locked">locked</option>
+                        <option value="banned">banned</option>
+                      </select>
+                      <input value={draft.banReason} onChange={(event) => setStatusDrafts((current) => ({ ...current, [account.id]: { ...draft, banReason: event.target.value } }))} placeholder="Reason" />
+                      <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
+                      <div className="account-action-row">
+                        <button className="btn secondary compact" type="button" onClick={() => updateAccountStatus(account.id)}>Save</button>
+                        {canManageUsers ? (
+                          <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-cell">No accounts registered</div>
+        )}
+      </section>
+
+      {canManageUsers ? (
+      <section className="results-panel">
+        <div className="section-heading">
+          <h2>API Keys</h2>
+          <span className="pill">{apiKeys.length} total</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>User</th>
+                <th>Prefix</th>
+                <th>Scopes</th>
+                <th>Last Used</th>
+                <th>State</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {apiKeys.length ? apiKeys.map((key) => (
+                <tr key={key.id}>
+                  <td>{key.name}</td>
+                  <td>{key.username}</td>
+                  <td><code>{key.key_prefix}</code></td>
+                  <td>{key.scopes.join(', ')}</td>
+                  <td>{key.last_used_at || 'Never'}</td>
+                  <td>{key.revoked_at ? <span className="status-badge banned">revoked</span> : <span className="status-badge active">active</span>}</td>
+                  <td>
+                    <button className="btn secondary compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
+                  </td>
+                </tr>
+              )) : <tr><td className="empty-cell" colSpan="7">No API keys found</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      ) : null}
+    </>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App />);
