@@ -31,6 +31,7 @@ const {
   listMinecraftAccounts,
   upsertMinecraftAccountFromMod,
   recordMinecraftAccountHeartbeat,
+  recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountStatus,
   deleteMinecraftAccount,
   writeAuditLog,
@@ -45,6 +46,8 @@ const DEFAULT_LOGIN_RATE_LIMIT = {
   lockMs: 15 * 60 * 1000,
 };
 const DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS = 60_000;
+const WEBSOCKET_CLOSING = 2;
+const WEBSOCKET_CLOSED = 3;
 
 function loadDotEnv(filePath = path.join(__dirname, '.env')) {
   if (!fs.existsSync(filePath)) return;
@@ -564,31 +567,98 @@ function auditRequest(db, auth, req, action, metadata = {}) {
 }
 
 function sendSocketJson(socket, payload) {
-  if (socket.readyState === socket.OPEN) {
-    socket.send(JSON.stringify(payload));
+  if (socket.readyState === WEBSOCKET_CLOSING || socket.readyState === WEBSOCKET_CLOSED) {
+    return;
   }
+  try {
+    socket.send(JSON.stringify(payload), () => {});
+  } catch (err) {
+    // The socket can close between the readyState check and send.
+  }
+}
+
+function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
+  const clients = new Set();
+
+  function accountsMessage() {
+    return {
+      type: 'accounts',
+      accounts: listMinecraftAccounts(db, { heartbeatWindowMs }),
+      sentAt: new Date().toISOString(),
+    };
+  }
+
+  function attach(socket) {
+    clients.add(socket);
+    socket.on('close', () => clients.delete(socket));
+    socket.on('error', () => clients.delete(socket));
+    setImmediate(() => {
+      sendSocketJson(socket, accountsMessage());
+    });
+  }
+
+  function broadcast() {
+    if (!clients.size) return;
+    const message = accountsMessage();
+    for (const socket of clients) {
+      if (socket.readyState !== WEBSOCKET_CLOSING && socket.readyState !== WEBSOCKET_CLOSED) {
+        sendSocketJson(socket, message);
+      } else {
+        clients.delete(socket);
+      }
+    }
+  }
+
+  return { attach, broadcast };
 }
 
 function attachModWebSocketServer(server, {
   db,
   fetchImpl,
   enabled = true,
+  authorizeDashboard = null,
+  dashboardAccounts = null,
 } = {}) {
-  if (!enabled || !db) return null;
+  if (!db) return null;
 
-  const socketServer = new WebSocketServer({ noServer: true });
+  const modSocketServer = enabled ? new WebSocketServer({ noServer: true }) : null;
+  const dashboardSocketServer = dashboardAccounts ? new WebSocketServer({ noServer: true }) : null;
   server.on('upgrade', (req, socket, head) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    if (parsedUrl.pathname !== '/api/mod/ws') {
-      socket.destroy();
+    if (parsedUrl.pathname === '/api/mod/ws' && modSocketServer) {
+      modSocketServer.handleUpgrade(req, socket, head, (ws) => {
+        modSocketServer.emit('connection', ws, req);
+      });
       return;
     }
-    socketServer.handleUpgrade(req, socket, head, (ws) => {
-      socketServer.emit('connection', ws, req);
-    });
+
+    if (parsedUrl.pathname === '/api/dashboard/ws' && dashboardSocketServer && authorizeDashboard) {
+      const access = authorizeDashboard(req);
+      if (!access.ok) {
+        socket.write(`HTTP/1.1 ${access.status} Unauthorized\r\nConnection: close\r\n\r\n`);
+        socket.destroy();
+        return;
+      }
+      dashboardSocketServer.handleUpgrade(req, socket, head, (ws) => {
+        dashboardSocketServer.emit('connection', ws, req, access.auth);
+      });
+      return;
+    }
+
+    socket.destroy();
   });
 
-  socketServer.on('connection', (socket, req) => {
+  if (dashboardSocketServer) {
+    dashboardSocketServer.on('connection', (socket) => {
+      dashboardAccounts.attach(socket);
+    });
+  }
+
+  if (!modSocketServer) {
+    return { modSocketServer, dashboardSocketServer };
+  }
+
+  modSocketServer.on('connection', (socket, req) => {
     let authContext = null;
     let account = null;
 
@@ -627,6 +697,7 @@ function attachModWebSocketServer(server, {
             clientVersion: message.clientVersion || null,
           });
           auditRequest(db, auth, req, 'mod.connect', { accountId: account.id, username: profile.name });
+          dashboardAccounts?.broadcast();
           sendSocketJson(socket, {
             type: 'auth_ok',
             account,
@@ -640,9 +711,33 @@ function attachModWebSocketServer(server, {
 
       if (message.type === 'heartbeat') {
         account = recordMinecraftAccountHeartbeat(db, account.id);
+        dashboardAccounts?.broadcast();
         sendSocketJson(socket, {
           type: 'heartbeat_ok',
           accountId: account.id,
+          lastSeenAt: account.last_seen_at,
+        });
+        return;
+      }
+
+      if (message.type === 'active' || message.type === 'hypixel' || message.type === 'offline' || message.type === 'banned') {
+        account = recordMinecraftAccountConnectionStatus(db, account.id, message.type, {
+          banReason: message.banReason,
+          banUntil: message.banUntil,
+          banId: message.banId,
+        });
+        auditRequest(db, authContext, req, 'mod.status', {
+          accountId: account.id,
+          status: account.status,
+          banUntil: account.ban_until,
+          banId: account.ban_id,
+        });
+        dashboardAccounts?.broadcast();
+        sendSocketJson(socket, {
+          type: 'status_ok',
+          accountId: account.id,
+          status: account.status,
+          account,
           lastSeenAt: account.last_seen_at,
         });
         return;
@@ -652,7 +747,7 @@ function attachModWebSocketServer(server, {
     });
   });
 
-  return socketServer;
+  return { modSocketServer, dashboardSocketServer };
 }
 
 function createAppServer(options = {}) {
@@ -680,6 +775,9 @@ function createAppServer(options = {}) {
   const secureCookies = options.secureCookies;
 
   const accountHeartbeatWindowMs = options.accountHeartbeatWindowMs || DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS;
+  const dashboardAccounts = db
+    ? createDashboardAccountBroadcaster({ db, heartbeatWindowMs: accountHeartbeatWindowMs })
+    : null;
   const server = http.createServer(async (req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = parsedUrl.pathname;
@@ -915,6 +1013,7 @@ function createAppServer(options = {}) {
           notes: body.notes,
         });
         auditRequest(db, access.auth, req, 'minecraft_account.create', { accountId: account.id });
+        dashboardAccounts?.broadcast();
         writeJson(res, 201, { account });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
@@ -938,6 +1037,7 @@ function createAppServer(options = {}) {
           accountId: body.accountId,
           status: body.status,
         });
+        dashboardAccounts?.broadcast();
         writeJson(res, 200, { ok: true });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
@@ -957,6 +1057,7 @@ function createAppServer(options = {}) {
         auditRequest(db, access.auth, req, 'minecraft_account.delete', {
           accountId: body.accountId,
         });
+        dashboardAccounts?.broadcast();
         writeJson(res, 200, { ok: true });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
@@ -1166,6 +1267,8 @@ function createAppServer(options = {}) {
     db,
     fetchImpl,
     enabled: options.modWebSocket !== false,
+    authorizeDashboard,
+    dashboardAccounts,
   });
   return server;
 }

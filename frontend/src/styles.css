@@ -484,6 +484,10 @@ tbody tr:hover {
   color: var(--rare);
 }
 
+.hypixel {
+  color: var(--rare);
+}
+
 .epic {
   color: var(--purple);
 }
@@ -577,6 +581,10 @@ tbody tr:hover {
 
 .status-dot.active {
   background: var(--green);
+}
+
+.status-dot.hypixel {
+  background: var(--rare);
 }
 
 .status-dot.locked {

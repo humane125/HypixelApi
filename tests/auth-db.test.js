@@ -8,6 +8,7 @@ const {
   revokeApiKey,
   createMinecraftAccount,
   listMinecraftAccounts,
+  recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountStatus,
   deleteMinecraftAccount,
   setUserPassword,
@@ -91,6 +92,60 @@ test('minecraft accounts can be created, listed, and marked banned', () => {
   assert.strictEqual(accounts[0].minecraft_username, 'PlayerOne');
   assert.strictEqual(accounts[0].status, 'banned');
   assert.strictEqual(accounts[0].ban_reason, 'Detected ban screen');
+});
+
+test('mod connection statuses support hypixel and preserve banned accounts', () => {
+	const db = createDatabase(':memory:');
+	const user = createUser(db, { username: 'owner', role: 'owner' });
+	const account = createMinecraftAccount(db, {
+    label: 'Hypixel account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000006',
+    minecraftUsername: 'HypixelPlayer',
+    ownerUserId: user.id,
+  });
+
+  const hypixel = recordMinecraftAccountConnectionStatus(db, account.id, 'hypixel');
+  assert.strictEqual(hypixel.status, 'hypixel');
+
+	const banned = recordMinecraftAccountConnectionStatus(db, account.id, 'banned');
+	assert.strictEqual(banned.status, 'banned');
+
+	const stillBanned = recordMinecraftAccountConnectionStatus(db, account.id, 'offline');
+	assert.strictEqual(stillBanned.status, 'banned');
+});
+
+test('timed mod bans store metadata and clear from listed accounts after expiry', () => {
+	const db = createDatabase(':memory:');
+	const user = createUser(db, { username: 'owner', role: 'owner' });
+	const account = createMinecraftAccount(db, {
+		label: 'Timed ban account',
+		minecraftUuid: '00000000-0000-0000-0000-000000000016',
+		minecraftUsername: 'TimedBanPlayer',
+		ownerUserId: user.id,
+	});
+
+	const banned = recordMinecraftAccountConnectionStatus(db, account.id, 'banned', {
+		banReason: 'Cheating through the use of unfair game advantages.',
+		banId: '#01346337',
+		banUntil: '2026-06-16T15:00:00.000Z',
+	}, { now: '2026-06-15T15:00:00.000Z' });
+	assert.strictEqual(banned.status, 'banned');
+	assert.strictEqual(banned.ban_reason, 'Cheating through the use of unfair game advantages.');
+	assert.strictEqual(banned.ban_id, '#01346337');
+	assert.strictEqual(banned.ban_until, '2026-06-16T15:00:00.000Z');
+
+	const activeOverwrite = recordMinecraftAccountConnectionStatus(db, account.id, 'active', {}, { now: '2026-06-15T15:01:00.000Z' });
+	assert.strictEqual(activeOverwrite.status, 'banned');
+
+	const listedDuringBan = listMinecraftAccounts(db, { now: Date.parse('2026-06-15T15:02:00.000Z') });
+	assert.strictEqual(listedDuringBan[0].status, 'banned');
+	assert.strictEqual(listedDuringBan[0].ban_until, '2026-06-16T15:00:00.000Z');
+
+	const listedAfterBan = listMinecraftAccounts(db, { now: Date.parse('2026-06-16T15:00:01.000Z') });
+	assert.strictEqual(listedAfterBan[0].status, 'offline');
+	assert.strictEqual(listedAfterBan[0].ban_reason, null);
+	assert.strictEqual(listedAfterBan[0].ban_id, null);
+	assert.strictEqual(listedAfterBan[0].ban_until, null);
 });
 
 test('minecraft accounts can be deleted', () => {

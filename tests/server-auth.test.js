@@ -51,6 +51,45 @@ function waitForSocketMessage(socket) {
   });
 }
 
+function closeSocketSilently(socket) {
+  socket.removeAllListeners('error');
+  socket.on('error', () => {});
+  socket.close();
+}
+
+async function waitForSocketMessageMatching(socket, predicate, timeoutMs = 1500) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.off('message', onMessage);
+      socket.off('error', onError);
+      reject(new Error('Timed out waiting for matching socket message'));
+    }, timeoutMs);
+    const onError = (err) => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+      reject(err);
+    };
+    const onMessage = (data) => {
+      let message;
+      try {
+        message = JSON.parse(data.toString());
+      } catch (err) {
+        clearTimeout(timeout);
+        socket.off('error', onError);
+        reject(err);
+        return;
+      }
+      if (!predicate(message)) return;
+      clearTimeout(timeout);
+      socket.off('error', onError);
+      socket.off('message', onMessage);
+      resolve(message);
+    };
+    socket.on('message', onMessage);
+    socket.once('error', onError);
+  });
+}
+
 function createTestServer() {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
@@ -180,6 +219,185 @@ test('mod websocket rejects api keys without mod connect scope', async () => {
     assert.strictEqual(denied.code, 'forbidden');
   } finally {
     socket.close();
+    await close(server);
+  }
+});
+
+test('mod websocket accepts active and offline status messages', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_status_socket',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000013',
+        name: 'StatusPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_status_socket',
+      username: 'StatusPlayer',
+    }));
+    const authed = await waitForSocketMessage(socket);
+    assert.strictEqual(authed.type, 'auth_ok');
+
+    socket.send(JSON.stringify({ type: 'active' }));
+    const active = await waitForSocketMessage(socket);
+    assert.strictEqual(active.type, 'status_ok');
+    assert.strictEqual(active.status, 'active');
+
+    socket.send(JSON.stringify({ type: 'offline' }));
+    const offline = await waitForSocketMessage(socket);
+    assert.strictEqual(offline.type, 'status_ok');
+    assert.strictEqual(offline.status, 'offline');
+
+    const account = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(authed.account.id);
+    assert.strictEqual(account.status, 'offline');
+  } finally {
+    socket.close();
+    await close(server);
+  }
+});
+
+test('mod websocket accepts hypixel and banned status messages', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_hypixel_socket',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000015',
+        name: 'HypixelStatusPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_hypixel_socket',
+      username: 'HypixelStatusPlayer',
+    }));
+    const authed = await waitForSocketMessage(socket);
+    assert.strictEqual(authed.type, 'auth_ok');
+
+    socket.send(JSON.stringify({ type: 'hypixel' }));
+    const hypixel = await waitForSocketMessage(socket);
+    assert.strictEqual(hypixel.type, 'status_ok');
+    assert.strictEqual(hypixel.status, 'hypixel');
+
+    socket.send(JSON.stringify({
+      type: 'banned',
+      banReason: 'Cheating through the use of unfair game advantages.',
+      banId: '#01346337',
+      banUntil: '2026-06-16T15:00:00.000Z',
+    }));
+    const banned = await waitForSocketMessage(socket);
+    assert.strictEqual(banned.type, 'status_ok');
+    assert.strictEqual(banned.status, 'banned');
+    assert.strictEqual(banned.account.ban_reason, 'Cheating through the use of unfair game advantages.');
+    assert.strictEqual(banned.account.ban_id, '#01346337');
+    assert.strictEqual(banned.account.ban_until, '2026-06-16T15:00:00.000Z');
+
+    socket.send(JSON.stringify({ type: 'offline' }));
+    const offline = await waitForSocketMessage(socket);
+    assert.strictEqual(offline.type, 'status_ok');
+    assert.strictEqual(offline.status, 'banned');
+
+    const account = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(authed.account.id);
+    assert.strictEqual(account.status, 'banned');
+    assert.strictEqual(account.ban_reason, 'Cheating through the use of unfair game advantages.');
+    assert.strictEqual(account.ban_id, '#01346337');
+    assert.strictEqual(account.ban_until, '2026-06-16T15:00:00.000Z');
+  } finally {
+    socket.close();
+    await close(server);
+  }
+});
+
+test('dashboard websocket pushes account status changes from mod websocket', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_dashboard_live',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000014',
+        name: 'LivePlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const dashboardSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/dashboard/ws', {
+    headers: { Cookie: await loginDashboard(baseUrl) },
+  });
+  const modSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    const initialPromise = waitForSocketMessage(dashboardSocket);
+    await waitForSocketOpen(dashboardSocket);
+    const initial = await initialPromise;
+    assert.strictEqual(initial.type, 'accounts');
+    assert.deepStrictEqual(initial.accounts, []);
+
+    await waitForSocketOpen(modSocket);
+    modSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_dashboard_live',
+      username: 'LivePlayer',
+    }));
+    const authed = await waitForSocketMessage(modSocket);
+    assert.strictEqual(authed.type, 'auth_ok');
+
+    const pushedPromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'accounts'
+      && message.accounts.some((account) => (
+        account.minecraft_username === 'LivePlayer'
+        && account.status === 'offline'
+      ))
+    ));
+    modSocket.send(JSON.stringify({ type: 'offline' }));
+    const offline = await waitForSocketMessage(modSocket);
+    assert.strictEqual(offline.type, 'status_ok');
+    assert.strictEqual(offline.status, 'offline');
+
+    const pushed = await pushedPromise;
+    const account = pushed.accounts.find((row) => row.minecraft_username === 'LivePlayer');
+    assert.strictEqual(account.status, 'offline');
+  } finally {
+    closeSocketSilently(dashboardSocket);
+    closeSocketSilently(modSocket);
     await close(server);
   }
 });

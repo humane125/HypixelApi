@@ -91,6 +91,8 @@ function migrateDatabase(db) {
       notes TEXT NOT NULL DEFAULT '',
       ban_reason TEXT,
       banned_at TEXT,
+      ban_until TEXT,
+      ban_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -138,6 +140,12 @@ function migrateDatabase(db) {
   }
   if (!accountColumns.includes('client_version')) {
     db.exec('ALTER TABLE minecraft_accounts ADD COLUMN client_version TEXT');
+  }
+  if (!accountColumns.includes('ban_until')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN ban_until TEXT');
+  }
+  if (!accountColumns.includes('ban_id')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN ban_id TEXT');
   }
 }
 
@@ -431,6 +439,19 @@ function createMinecraftAccount(db, {
 }
 
 function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindowMs = DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS } = {}) {
+  if (isActiveBan(account, new Date(now).toISOString())) {
+    return account;
+  }
+  if (account.status === 'banned') {
+    return {
+      ...account,
+      status: 'offline',
+      ban_reason: null,
+      banned_at: null,
+      ban_until: null,
+      ban_id: null,
+    };
+  }
   if (
     account.status === 'active'
     && account.last_seen_at
@@ -439,6 +460,26 @@ function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindow
     return { ...account, status: 'offline' };
   }
   return account;
+}
+
+function isActiveBan(account, timestamp = nowIso()) {
+  return account
+    && account.status === 'banned'
+    && (!account.ban_until || account.ban_until > timestamp);
+}
+
+function cleanOptionalText(value) {
+  const text = String(value || '').trim();
+  return text || null;
+}
+
+function normalizeFutureIso(value, timestamp) {
+  const text = cleanOptionalText(value);
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) return null;
+  const iso = new Date(parsed).toISOString();
+  return iso > timestamp ? iso : null;
 }
 
 function listMinecraftAccounts(db, options = {}) {
@@ -478,18 +519,37 @@ function upsertMinecraftAccountFromMod(db, {
   const timestamp = nowIso();
   const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE minecraft_uuid = ?').get(cleanUuid);
   if (existing) {
+    const preserveBan = isActiveBan(existing, timestamp);
     db.prepare(`
       UPDATE minecraft_accounts
       SET label = ?,
           minecraft_username = ?,
           owner_user_id = ?,
-          status = CASE WHEN status = 'banned' THEN status ELSE 'active' END,
+          status = ?,
+          ban_reason = ?,
+          banned_at = ?,
+          ban_until = ?,
+          ban_id = ?,
           last_connected_at = ?,
           last_seen_at = ?,
           client_version = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(cleanUsername, cleanUsername, ownerUserId, timestamp, timestamp, clientVersion, timestamp, existing.id);
+    `).run(
+      cleanUsername,
+      cleanUsername,
+      ownerUserId,
+      preserveBan ? 'banned' : 'active',
+      preserveBan ? existing.ban_reason : null,
+      preserveBan ? existing.banned_at : null,
+      preserveBan ? existing.ban_until : null,
+      preserveBan ? existing.ban_id : null,
+      timestamp,
+      timestamp,
+      clientVersion,
+      timestamp,
+      existing.id
+    );
     return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(existing.id);
   }
 
@@ -513,30 +573,98 @@ function upsertMinecraftAccountFromMod(db, {
   return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid);
 }
 
-function recordMinecraftAccountHeartbeat(db, accountId) {
-  const timestamp = nowIso();
+function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
+  const timestamp = now || nowIso();
+  const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+  const preserveBan = isActiveBan(existing, timestamp);
+  const nextStatus = preserveBan ? 'banned' : (existing && existing.status === 'hypixel' ? 'hypixel' : 'active');
   db.prepare(`
     UPDATE minecraft_accounts
     SET last_seen_at = ?,
-        status = CASE WHEN status = 'banned' THEN status ELSE 'active' END,
+        status = ?,
+        ban_reason = ?,
+        banned_at = ?,
+        ban_until = ?,
+        ban_id = ?,
         updated_at = ?
     WHERE id = ?
-  `).run(timestamp, timestamp, accountId);
+  `).run(
+    timestamp,
+    nextStatus,
+    preserveBan ? existing.ban_reason : null,
+    preserveBan ? existing.banned_at : null,
+    preserveBan ? existing.ban_until : null,
+    preserveBan ? existing.ban_id : null,
+    timestamp,
+    accountId
+  );
 
   return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
 }
 
-function updateMinecraftAccountStatus(db, accountId, { status, banReason = null }) {
-  const allowedStatuses = new Set(['active', 'offline', 'locked', 'banned']);
+function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {}, { now = null } = {}) {
+  const cleanStatus = String(status || '').trim().toLowerCase();
+  if (!['active', 'hypixel', 'offline', 'banned'].includes(cleanStatus)) throw new Error('Invalid connection status');
+
+  const timestamp = now || nowIso();
+  const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+  if (!existing) return null;
+
+  let nextStatus = cleanStatus;
+  let banReason = null;
+  let bannedAt = null;
+  let banUntil = null;
+  let banId = null;
+
+  if (cleanStatus === 'banned') {
+    nextStatus = 'banned';
+    banReason = cleanOptionalText(ban.banReason) || existing.ban_reason || 'Detected by mod WebSocket status';
+    bannedAt = existing.status === 'banned' && existing.banned_at ? existing.banned_at : timestamp;
+    banUntil = normalizeFutureIso(ban.banUntil, timestamp) || existing.ban_until || null;
+    banId = cleanOptionalText(ban.banId) || existing.ban_id || null;
+  } else if (isActiveBan(existing, timestamp)) {
+    nextStatus = 'banned';
+    banReason = existing.ban_reason;
+    bannedAt = existing.banned_at;
+    banUntil = existing.ban_until;
+    banId = existing.ban_id;
+  }
+
+  db.prepare(`
+    UPDATE minecraft_accounts
+    SET last_seen_at = ?,
+        status = ?,
+        ban_reason = ?,
+        banned_at = ?,
+        ban_until = ?,
+        ban_id = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(timestamp, nextStatus, banReason, bannedAt, banUntil, banId, timestamp, accountId);
+
+  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+}
+
+function updateMinecraftAccountStatus(db, accountId, { status, banReason = null, banUntil = null, banId = null }) {
+  const allowedStatuses = new Set(['active', 'hypixel', 'offline', 'locked', 'banned']);
   const cleanStatus = String(status || '').trim().toLowerCase();
   if (!allowedStatuses.has(cleanStatus)) throw new Error('Invalid account status');
 
-  const bannedAt = cleanStatus === 'banned' ? nowIso() : null;
+  const timestamp = nowIso();
+  const bannedAt = cleanStatus === 'banned' ? timestamp : null;
   db.prepare(`
     UPDATE minecraft_accounts
-    SET status = ?, ban_reason = ?, banned_at = ?, updated_at = ?
+    SET status = ?, ban_reason = ?, banned_at = ?, ban_until = ?, ban_id = ?, updated_at = ?
     WHERE id = ?
-  `).run(cleanStatus, banReason, bannedAt, nowIso(), accountId);
+  `).run(
+    cleanStatus,
+    cleanStatus === 'banned' ? cleanOptionalText(banReason) : null,
+    bannedAt,
+    cleanStatus === 'banned' ? normalizeFutureIso(banUntil, timestamp) : null,
+    cleanStatus === 'banned' ? cleanOptionalText(banId) : null,
+    timestamp,
+    accountId
+  );
 }
 
 function deleteMinecraftAccount(db, accountId) {
@@ -580,6 +708,7 @@ module.exports = {
   listMinecraftAccounts,
   upsertMinecraftAccountFromMod,
   recordMinecraftAccountHeartbeat,
+  recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountStatus,
   deleteMinecraftAccount,
   writeAuditLog,

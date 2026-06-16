@@ -92,6 +92,11 @@ function tokenQuery(path, token) {
   return `${path}${separator}token=${encodeURIComponent(token)}`;
 }
 
+function websocketUrl(path) {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${path}`;
+}
+
 function formatNumber(num) {
   return Number(num || 0).toLocaleString();
 }
@@ -114,6 +119,30 @@ function formatDuration(ms) {
   if (hours > 0) return `${hours}h ${minutes % 60}m`;
   if (minutes > 0) return `${minutes}m`;
   return `${seconds}s`;
+}
+
+function formatFullDuration(ms) {
+  if (!ms || ms <= 0) return 'Ended';
+  let seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / 86400);
+  seconds -= days * 86400;
+  const hours = Math.floor(seconds / 3600);
+  seconds -= hours * 3600;
+  const minutes = Math.floor(seconds / 60);
+  seconds -= minutes * 60;
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours || parts.length) parts.push(`${hours}h`);
+  if (minutes || parts.length) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  return parts.join(' ');
+}
+
+function displayAccountStatus(account, nowMs) {
+  if (account.status === 'banned' && account.ban_until && Date.parse(account.ban_until) <= nowMs) {
+    return 'offline';
+  }
+  return account.status;
 }
 
 function parseNumber(value) {
@@ -608,8 +637,8 @@ function DashboardView() {
   const [userForm, setUserForm] = useState(defaultUserForm);
   const [statusMessage, setStatusMessage] = useState('Log in to access the dashboard');
   const [issuedKey, setIssuedKey] = useState(null);
-  const [statusDrafts, setStatusDrafts] = useState({});
   const [roleDrafts, setRoleDrafts] = useState({});
+  const [nowMs, setNowMs] = useState(Date.now());
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -640,6 +669,52 @@ function DashboardView() {
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    if (!me) return undefined;
+
+    let closed = false;
+    const socket = new WebSocket(websocketUrl('/api/dashboard/ws'));
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'accounts') {
+          setAccounts(data.accounts || []);
+        }
+      } catch (err) {
+        console.error('Dashboard websocket message failed:', err);
+      }
+    };
+    socket.onclose = () => {
+      if (!closed) setStatusMessage('Dashboard live updates disconnected');
+    };
+    socket.onerror = () => {
+      socket.close();
+    };
+
+    return () => {
+      closed = true;
+      socket.close();
+    };
+  }, [me]);
+
+  useEffect(() => {
+    if (!accounts.some((account) => account.status === 'banned' && account.ban_until)) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [accounts]);
+
+  useEffect(() => {
+    const hasExpiredBan = accounts.some((account) => (
+      account.status === 'banned'
+      && account.ban_until
+      && Date.parse(account.ban_until) <= nowMs
+    ));
+    if (hasExpiredBan) {
+      loadDashboard();
+    }
+  }, [accounts, loadDashboard, nowMs]);
 
   const login = useCallback(async (event) => {
     event.preventDefault();
@@ -805,26 +880,8 @@ function DashboardView() {
     }
   }, [loadDashboard]);
 
-  const updateAccountStatus = useCallback(async (accountId) => {
-    const draft = statusDrafts[accountId] || {};
-    try {
-      await apiFetch('/api/dashboard/accounts/status', null, {
-        method: 'POST',
-        body: JSON.stringify({
-          accountId,
-          status: draft.status || 'active',
-          banReason: draft.banReason || null,
-        }),
-      });
-      setStatusMessage('Account status updated');
-      loadDashboard();
-    } catch (err) {
-      setStatusMessage(err.message);
-    }
-  }, [loadDashboard, statusDrafts]);
-
   const connectAccount = useCallback((account) => {
-    setStatusMessage(`Connect requested for ${account.minecraft_username}. Mod WebSocket control is not wired yet.`);
+    setStatusMessage(`Connect requested for ${account.minecraft_username}. Remote control is not wired yet.`);
   }, []);
 
   if (!me) {
@@ -1012,7 +1069,10 @@ function DashboardView() {
         {accounts.length ? (
           <div className="account-grid">
             {accounts.map((account) => {
-              const draft = statusDrafts[account.id] || { status: account.status, banReason: account.ban_reason || '' };
+              const displayStatus = displayAccountStatus(account, nowMs);
+              const banRemainingMs = displayStatus === 'banned' && account.ban_until
+                ? Date.parse(account.ban_until) - nowMs
+                : null;
               return (
                 <article className="account-card" key={account.id}>
                   <div className="account-card-head">
@@ -1026,7 +1086,7 @@ function DashboardView() {
                       <h3>{account.minecraft_username}</h3>
                       <span>{account.label}</span>
                     </div>
-                    <span className={`status-dot ${account.status}`} title={account.status} />
+                    <span className={`status-dot ${displayStatus}`} title={displayStatus} />
                   </div>
 
                   <dl className="account-meta">
@@ -1036,33 +1096,41 @@ function DashboardView() {
                     </div>
                     <div>
                       <dt>Status</dt>
-                      <dd><span className={`status-badge ${account.status}`}>{account.status}</span></dd>
+                      <dd><span className={`status-badge ${displayStatus}`}>{displayStatus}</span></dd>
                     </div>
+                    {displayStatus === 'banned' && banRemainingMs != null ? (
+                      <div>
+                        <dt>Time Left</dt>
+                        <dd>{formatFullDuration(banRemainingMs)}</dd>
+                      </div>
+                    ) : null}
+                    {displayStatus === 'banned' && account.ban_reason ? (
+                      <div className="wide-row">
+                        <dt>Reason</dt>
+                        <dd>{account.ban_reason}</dd>
+                      </div>
+                    ) : null}
+                    {displayStatus === 'banned' && account.ban_id ? (
+                      <div>
+                        <dt>Ban ID</dt>
+                        <dd>{account.ban_id}</dd>
+                      </div>
+                    ) : null}
                     <div className="uuid-row">
                       <dt>UUID</dt>
                       <dd>{account.minecraft_uuid}</dd>
                     </div>
                     <div>
                       <dt>Notes</dt>
-                      <dd>{account.notes || account.ban_reason || 'None'}</dd>
+                      <dd>{account.notes || 'None'}</dd>
                     </div>
                   </dl>
 
-                  {canManageAccounts ? (
+                  {canManageUsers ? (
                     <div className="account-controls">
-                      <select value={draft.status} onChange={(event) => setStatusDrafts((current) => ({ ...current, [account.id]: { ...draft, status: event.target.value } }))}>
-                        <option value="active">active</option>
-                        <option value="offline">offline</option>
-                        <option value="locked">locked</option>
-                        <option value="banned">banned</option>
-                      </select>
-                      <input value={draft.banReason} onChange={(event) => setStatusDrafts((current) => ({ ...current, [account.id]: { ...draft, banReason: event.target.value } }))} placeholder="Reason" />
-                      <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
                       <div className="account-action-row">
-                        <button className="btn secondary compact" type="button" onClick={() => updateAccountStatus(account.id)}>Save</button>
-                        {canManageUsers ? (
-                          <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
-                        ) : null}
+                        <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
+                        <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
                       </div>
                     </div>
                   ) : null}
