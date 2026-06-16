@@ -136,6 +136,43 @@ small {
   color: #0b0c0f;
 }
 
+.folder-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.folder-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0c0e11;
+  color: var(--muted);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.folder-tabs button.active {
+  background: var(--accent);
+  color: #0b0c0f;
+  border-color: var(--accent);
+}
+
+.folder-tabs small {
+  min-width: 22px;
+  margin: 0;
+  border-radius: 999px;
+  background: rgba(141, 148, 158, 0.16);
+  color: inherit;
+  padding: 2px 7px;
+  text-align: center;
+}
+
 .token-input {
   width: min(280px, 100%);
 }

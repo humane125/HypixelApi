@@ -273,6 +273,49 @@ test('mod websocket accepts active and offline status messages', async () => {
   }
 });
 
+test('mod websocket closes cleanly when the dashboard deleted its account while connected', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_deleted_account_socket',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000016',
+        name: 'DeletedLivePlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_deleted_account_socket',
+      username: 'DeletedLivePlayer',
+    }));
+    const authed = await waitForSocketMessage(socket);
+    assert.strictEqual(authed.type, 'auth_ok');
+
+    db.prepare('DELETE FROM minecraft_accounts WHERE id = ?').run(authed.account.id);
+    socket.send(JSON.stringify({ type: 'heartbeat' }));
+    const deleted = await waitForSocketMessage(socket);
+    assert.strictEqual(deleted.type, 'error');
+    assert.strictEqual(deleted.code, 'account_deleted');
+  } finally {
+    closeSocketSilently(socket);
+    await close(server);
+  }
+});
+
 test('mod websocket accepts hypixel and banned status messages', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
@@ -335,6 +378,76 @@ test('mod websocket accepts hypixel and banned status messages', async () => {
     assert.strictEqual(account.ban_until, '2026-06-16T15:00:00.000Z');
   } finally {
     socket.close();
+    await close(server);
+  }
+});
+
+test('mod websocket broadcasts disconnect command to other connected mods when an account is banned', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_disconnect_socket',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async (requestUrl) => {
+      const username = String(requestUrl).split('/').pop();
+      const profiles = {
+        BannedPlayer: '00000000000000000000000000000021',
+        SafePlayer: '00000000000000000000000000000022',
+      };
+      return {
+        ok: Boolean(profiles[username]),
+        json: async () => ({
+          id: profiles[username],
+          name: username,
+        }),
+      };
+    },
+  });
+  const baseUrl = await listen(server);
+  const bannedSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  const safeSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await Promise.all([waitForSocketOpen(bannedSocket), waitForSocketOpen(safeSocket)]);
+    bannedSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_disconnect_socket',
+      username: 'BannedPlayer',
+    }));
+    safeSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_disconnect_socket',
+      username: 'SafePlayer',
+    }));
+    const bannedAuth = await waitForSocketMessage(bannedSocket);
+    const safeAuth = await waitForSocketMessage(safeSocket);
+    assert.strictEqual(bannedAuth.type, 'auth_ok');
+    assert.strictEqual(safeAuth.type, 'auth_ok');
+
+    const disconnectPromise = waitForSocketMessageMatching(safeSocket, (message) => (
+      message.type === 'disconnect_now'
+      && message.sourceAccount.minecraftUsername === 'BannedPlayer'
+    ));
+    bannedSocket.send(JSON.stringify({
+      type: 'banned',
+      banReason: 'Dev test ban',
+      banId: '#TEST',
+    }));
+    const bannedStatus = await waitForSocketMessage(bannedSocket);
+    assert.strictEqual(bannedStatus.type, 'status_ok');
+    assert.strictEqual(bannedStatus.status, 'banned');
+
+    const disconnect = await disconnectPromise;
+    assert.strictEqual(disconnect.reason, 'Ban detected on BannedPlayer');
+    assert.strictEqual(disconnect.sourceAccount.id, bannedAuth.account.id);
+  } finally {
+    closeSocketSilently(bannedSocket);
+    closeSocketSilently(safeSocket);
     await close(server);
   }
 });
@@ -868,6 +981,58 @@ test('owner can delete minecraft accounts but manager cannot', async () => {
     });
     const body = await listed.json();
     assert.strictEqual(body.accounts.some((row) => row.id === account.id), false);
+  } finally {
+    await close(server);
+  }
+});
+
+test('manager can move banned minecraft account to banned folder', async () => {
+  const { db, server } = createTestServer();
+  const baseUrl = await listen(server);
+  try {
+    const ownerCookie = await loginDashboard(baseUrl);
+    await fetch(`${baseUrl}/api/dashboard/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: ownerCookie,
+      },
+      body: JSON.stringify({
+        username: 'manager',
+        password: 'manager-password',
+        role: 'manager',
+      }),
+    });
+    const owner = db.prepare('SELECT id FROM users WHERE username = ?').get('owner');
+    const result = db.prepare(`
+      INSERT INTO minecraft_accounts (
+        label,
+        minecraft_uuid,
+        minecraft_username,
+        owner_user_id,
+        status,
+        notes,
+        ban_reason,
+        banned_at,
+        created_at,
+        updated_at
+      )
+      VALUES ('Banned test', '00000000-0000-0000-0000-000000000042', 'FolderMovePlayer', ?, 'banned', '', 'Cheating', '2026-06-16T00:00:00.000Z', '2026-06-16T00:00:00.000Z', '2026-06-16T00:00:00.000Z')
+    `).run(owner.id);
+
+    const managerCookie = await loginDashboard(baseUrl, 'manager', 'manager-password');
+    const moved = await fetch(`${baseUrl}/api/dashboard/accounts/banned-folder`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: managerCookie,
+      },
+      body: JSON.stringify({ accountId: result.lastInsertRowid }),
+    });
+    assert.strictEqual(moved.status, 200);
+    const body = await moved.json();
+    assert.strictEqual(body.account.is_banned_foldered, 1);
+    assert.ok(body.account.banned_foldered_at);
   } finally {
     await close(server);
   }

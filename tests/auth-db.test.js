@@ -10,6 +10,7 @@ const {
   listMinecraftAccounts,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountStatus,
+  markMinecraftAccountBannedFoldered,
   deleteMinecraftAccount,
   setUserPassword,
   authenticateUserPassword,
@@ -146,6 +147,33 @@ test('timed mod bans store metadata and clear from listed accounts after expiry'
 	assert.strictEqual(listedAfterBan[0].ban_reason, null);
 	assert.strictEqual(listedAfterBan[0].ban_id, null);
 	assert.strictEqual(listedAfterBan[0].ban_until, null);
+});
+
+test('banned accounts are foldered after 8 hours or manual move', () => {
+	const db = createDatabase(':memory:');
+	const user = createUser(db, { username: 'owner', role: 'owner' });
+	const account = createMinecraftAccount(db, {
+		label: 'Foldered ban account',
+		minecraftUuid: '00000000-0000-0000-0000-000000000026',
+		minecraftUsername: 'FolderedBanPlayer',
+		ownerUserId: user.id,
+	});
+
+	recordMinecraftAccountConnectionStatus(db, account.id, 'banned', {
+		banReason: 'Cheating',
+	}, { now: '2026-06-16T00:00:00.000Z' });
+
+	const early = listMinecraftAccounts(db, { now: Date.parse('2026-06-16T07:59:59.000Z') })[0];
+	assert.strictEqual(early.is_banned_foldered, 0);
+	assert.strictEqual(early.banned_folder_available_at, '2026-06-16T08:00:00.000Z');
+
+	const late = listMinecraftAccounts(db, { now: Date.parse('2026-06-16T08:00:00.000Z') })[0];
+	assert.strictEqual(late.is_banned_foldered, 1);
+
+	markMinecraftAccountBannedFoldered(db, account.id, { now: '2026-06-16T02:00:00.000Z' });
+	const manual = listMinecraftAccounts(db, { now: Date.parse('2026-06-16T02:00:01.000Z') })[0];
+	assert.strictEqual(manual.is_banned_foldered, 1);
+	assert.strictEqual(manual.banned_foldered_at, '2026-06-16T02:00:00.000Z');
 });
 
 test('minecraft accounts can be deleted', () => {

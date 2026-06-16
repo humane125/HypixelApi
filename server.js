@@ -33,6 +33,7 @@ const {
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountStatus,
+  markMinecraftAccountBannedFoldered,
   deleteMinecraftAccount,
   writeAuditLog,
 } = require('./auth-db');
@@ -612,6 +613,57 @@ function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
   return { attach, broadcast };
 }
 
+function createModConnectionRegistry() {
+  const clients = new Set();
+
+  function register(socket, auth, account) {
+    let client = [...clients].find((entry) => entry.socket === socket);
+    if (!client) {
+      client = { socket, auth, account };
+      clients.add(client);
+      socket.on('close', () => clients.delete(client));
+      socket.on('error', () => clients.delete(client));
+    }
+    client.auth = auth;
+    client.account = account;
+  }
+
+  function broadcastDisconnect({ sourceSocket, sourceAccount }) {
+    if (!sourceAccount) return;
+    const minecraftUsername = sourceAccount.minecraft_username;
+    const message = {
+      type: 'disconnect_now',
+      reason: `Ban detected on ${minecraftUsername || 'another account'}`,
+      sourceAccount: {
+        id: sourceAccount.id,
+        minecraftUuid: sourceAccount.minecraft_uuid,
+        minecraftUsername,
+      },
+      sentAt: new Date().toISOString(),
+    };
+
+    for (const client of clients) {
+      if (client.socket === sourceSocket) continue;
+      if (client.socket.readyState === WEBSOCKET_CLOSING || client.socket.readyState === WEBSOCKET_CLOSED) {
+        clients.delete(client);
+        continue;
+      }
+      sendSocketJson(client.socket, message);
+    }
+  }
+
+  return { register, broadcastDisconnect };
+}
+
+function sendDeletedModAccountError(socket) {
+  sendSocketJson(socket, {
+    type: 'error',
+    code: 'account_deleted',
+    message: 'Minecraft account was deleted from the dashboard; reconnect the mod to register it again.',
+  });
+  setImmediate(() => socket.close(4000, 'account_deleted'));
+}
+
 function attachModWebSocketServer(server, {
   db,
   fetchImpl,
@@ -623,6 +675,7 @@ function attachModWebSocketServer(server, {
 
   const modSocketServer = enabled ? new WebSocketServer({ noServer: true }) : null;
   const dashboardSocketServer = dashboardAccounts ? new WebSocketServer({ noServer: true }) : null;
+  const modConnections = createModConnectionRegistry();
   server.on('upgrade', (req, socket, head) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (parsedUrl.pathname === '/api/mod/ws' && modSocketServer) {
@@ -696,6 +749,7 @@ function attachModWebSocketServer(server, {
             ownerUserId: auth.user.id,
             clientVersion: message.clientVersion || null,
           });
+          modConnections.register(socket, auth, account);
           auditRequest(db, auth, req, 'mod.connect', { accountId: account.id, username: profile.name });
           dashboardAccounts?.broadcast();
           sendSocketJson(socket, {
@@ -711,6 +765,11 @@ function attachModWebSocketServer(server, {
 
       if (message.type === 'heartbeat') {
         account = recordMinecraftAccountHeartbeat(db, account.id);
+        if (!account) {
+          sendDeletedModAccountError(socket);
+          return;
+        }
+        modConnections.register(socket, authContext, account);
         dashboardAccounts?.broadcast();
         sendSocketJson(socket, {
           type: 'heartbeat_ok',
@@ -726,6 +785,11 @@ function attachModWebSocketServer(server, {
           banUntil: message.banUntil,
           banId: message.banId,
         });
+        if (!account) {
+          sendDeletedModAccountError(socket);
+          return;
+        }
+        modConnections.register(socket, authContext, account);
         auditRequest(db, authContext, req, 'mod.status', {
           accountId: account.id,
           status: account.status,
@@ -740,6 +804,9 @@ function attachModWebSocketServer(server, {
           account,
           lastSeenAt: account.last_seen_at,
         });
+        if (message.type === 'banned' && account.status === 'banned') {
+          modConnections.broadcastDisconnect({ sourceSocket: socket, sourceAccount: account });
+        }
         return;
       }
 
@@ -1039,6 +1106,30 @@ function createAppServer(options = {}) {
         });
         dashboardAccounts?.broadcast();
         writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts/banned-folder' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardAccountManager(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const account = markMinecraftAccountBannedFoldered(db, body.accountId);
+        if (!account) {
+          writeJson(res, 404, { error: 'Banned Minecraft account not found' });
+          return;
+        }
+        auditRequest(db, access.auth, req, 'minecraft_account.banned_folder', {
+          accountId: body.accountId,
+        });
+        dashboardAccounts?.broadcast();
+        writeJson(res, 200, { account });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
       }

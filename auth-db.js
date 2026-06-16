@@ -7,6 +7,7 @@ const API_KEY_PREFIX_LENGTH = 11;
 const SESSION_DAYS = 7;
 const DASHBOARD_ROLES = new Set(['owner', 'manager', 'viewer']);
 const DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS = 60_000;
+const BANNED_FOLDER_DELAY_MS = 8 * 60 * 60 * 1000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -93,6 +94,7 @@ function migrateDatabase(db) {
       banned_at TEXT,
       ban_until TEXT,
       ban_id TEXT,
+      banned_foldered_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -146,6 +148,9 @@ function migrateDatabase(db) {
   }
   if (!accountColumns.includes('ban_id')) {
     db.exec('ALTER TABLE minecraft_accounts ADD COLUMN ban_id TEXT');
+  }
+  if (!accountColumns.includes('banned_foldered_at')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN banned_foldered_at TEXT');
   }
 }
 
@@ -439,17 +444,20 @@ function createMinecraftAccount(db, {
 }
 
 function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindowMs = DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS } = {}) {
+  const foldered = applyBannedFolderState(account, { now });
   if (isActiveBan(account, new Date(now).toISOString())) {
-    return account;
+    return foldered;
   }
   if (account.status === 'banned') {
     return {
-      ...account,
+      ...foldered,
       status: 'offline',
       ban_reason: null,
       banned_at: null,
       ban_until: null,
       ban_id: null,
+      is_banned_foldered: 0,
+      banned_folder_available_at: null,
     };
   }
   if (
@@ -457,9 +465,27 @@ function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindow
     && account.last_seen_at
     && now - Date.parse(account.last_seen_at) > heartbeatWindowMs
   ) {
-    return { ...account, status: 'offline' };
+    return { ...foldered, status: 'offline' };
   }
-  return account;
+  return foldered;
+}
+
+function applyBannedFolderState(account, { now = Date.now() } = {}) {
+  if (!account || account.status !== 'banned' || !account.banned_at) {
+    return {
+      ...account,
+      is_banned_foldered: 0,
+      banned_folder_available_at: null,
+    };
+  }
+  const availableAtMs = Date.parse(account.banned_at) + BANNED_FOLDER_DELAY_MS;
+  const availableAt = Number.isFinite(availableAtMs) ? new Date(availableAtMs).toISOString() : null;
+  const isFoldered = Boolean(account.banned_foldered_at) || (availableAtMs <= now);
+  return {
+    ...account,
+    is_banned_foldered: isFoldered ? 1 : 0,
+    banned_folder_available_at: availableAt,
+  };
 }
 
 function isActiveBan(account, timestamp = nowIso()) {
@@ -530,6 +556,7 @@ function upsertMinecraftAccountFromMod(db, {
           banned_at = ?,
           ban_until = ?,
           ban_id = ?,
+          banned_foldered_at = ?,
           last_connected_at = ?,
           last_seen_at = ?,
           client_version = ?,
@@ -544,6 +571,7 @@ function upsertMinecraftAccountFromMod(db, {
       preserveBan ? existing.banned_at : null,
       preserveBan ? existing.ban_until : null,
       preserveBan ? existing.ban_id : null,
+      preserveBan ? existing.banned_foldered_at : null,
       timestamp,
       timestamp,
       clientVersion,
@@ -586,6 +614,7 @@ function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
         banned_at = ?,
         ban_until = ?,
         ban_id = ?,
+        banned_foldered_at = ?,
         updated_at = ?
     WHERE id = ?
   `).run(
@@ -595,6 +624,7 @@ function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
     preserveBan ? existing.banned_at : null,
     preserveBan ? existing.ban_until : null,
     preserveBan ? existing.ban_id : null,
+    preserveBan ? existing.banned_foldered_at : null,
     timestamp,
     accountId
   );
@@ -638,9 +668,20 @@ function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {},
         banned_at = ?,
         ban_until = ?,
         ban_id = ?,
+        banned_foldered_at = ?,
         updated_at = ?
     WHERE id = ?
-  `).run(timestamp, nextStatus, banReason, bannedAt, banUntil, banId, timestamp, accountId);
+  `).run(
+    timestamp,
+    nextStatus,
+    banReason,
+    bannedAt,
+    banUntil,
+    banId,
+    nextStatus === 'banned' ? existing.banned_foldered_at : null,
+    timestamp,
+    accountId
+  );
 
   return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
 }
@@ -654,7 +695,7 @@ function updateMinecraftAccountStatus(db, accountId, { status, banReason = null,
   const bannedAt = cleanStatus === 'banned' ? timestamp : null;
   db.prepare(`
     UPDATE minecraft_accounts
-    SET status = ?, ban_reason = ?, banned_at = ?, ban_until = ?, ban_id = ?, updated_at = ?
+    SET status = ?, ban_reason = ?, banned_at = ?, ban_until = ?, ban_id = ?, banned_foldered_at = ?, updated_at = ?
     WHERE id = ?
   `).run(
     cleanStatus,
@@ -662,9 +703,28 @@ function updateMinecraftAccountStatus(db, accountId, { status, banReason = null,
     bannedAt,
     cleanStatus === 'banned' ? normalizeFutureIso(banUntil, timestamp) : null,
     cleanStatus === 'banned' ? cleanOptionalText(banId) : null,
+    null,
     timestamp,
     accountId
   );
+}
+
+function markMinecraftAccountBannedFoldered(db, accountId, { now = null } = {}) {
+  const timestamp = now || nowIso();
+  db.prepare(`
+    UPDATE minecraft_accounts
+    SET banned_foldered_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'banned'
+  `).run(timestamp, timestamp, accountId);
+  const account = db.prepare(`
+    SELECT
+      minecraft_accounts.*,
+      users.username AS owner_username
+    FROM minecraft_accounts
+    LEFT JOIN users ON users.id = minecraft_accounts.owner_user_id
+    WHERE minecraft_accounts.id = ?
+  `).get(accountId);
+  return account ? applyComputedAccountStatus(account, { now: Date.parse(timestamp) }) : null;
 }
 
 function deleteMinecraftAccount(db, accountId) {
@@ -710,6 +770,7 @@ module.exports = {
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountStatus,
+  markMinecraftAccountBannedFoldered,
   deleteMinecraftAccount,
   writeAuditLog,
 };

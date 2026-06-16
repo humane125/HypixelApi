@@ -145,6 +145,16 @@ function displayAccountStatus(account, nowMs) {
   return account.status;
 }
 
+function isAccountInBannedFolder(account, nowMs) {
+  if (displayAccountStatus(account, nowMs) !== 'banned') return false;
+  if (account.is_banned_foldered) return true;
+  return Boolean(account.banned_folder_available_at && Date.parse(account.banned_folder_available_at) <= nowMs);
+}
+
+function accountOwnerFolder(account) {
+  return account.owner_username || 'Unassigned';
+}
+
 function parseNumber(value) {
   const parsed = Number(String(value || '').trim());
   return Number.isFinite(parsed) && String(value || '').trim() ? parsed : null;
@@ -639,6 +649,7 @@ function DashboardView() {
   const [issuedKey, setIssuedKey] = useState(null);
   const [roleDrafts, setRoleDrafts] = useState({});
   const [nowMs, setNowMs] = useState(Date.now());
+  const [activeAccountFolder, setActiveAccountFolder] = useState('all');
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -700,7 +711,10 @@ function DashboardView() {
   }, [me]);
 
   useEffect(() => {
-    if (!accounts.some((account) => account.status === 'banned' && account.ban_until)) return undefined;
+    if (!accounts.some((account) => (
+      account.status === 'banned'
+      && (account.ban_until || account.banned_folder_available_at)
+    ))) return undefined;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [accounts]);
@@ -852,6 +866,20 @@ function DashboardView() {
     }
   }, [loadDashboard]);
 
+  const moveMinecraftAccountToBannedFolder = useCallback(async (account) => {
+    try {
+      await apiFetch('/api/dashboard/accounts/banned-folder', null, {
+        method: 'POST',
+        body: JSON.stringify({ accountId: account.id }),
+      });
+      setStatusMessage('Account moved to Banned');
+      setActiveAccountFolder('banned');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
   const deleteDashboardUser = useCallback(async (user) => {
     const confirmed = window.confirm(`Delete dashboard user "${user.username}"?`);
     if (!confirmed) return;
@@ -911,6 +939,28 @@ function DashboardView() {
 
   const canManageUsers = me.role === 'owner';
   const canManageAccounts = me.role === 'owner' || me.role === 'manager';
+  const ownerFolders = [...new Set(accounts
+    .filter((account) => !isAccountInBannedFolder(account, nowMs))
+    .map(accountOwnerFolder))]
+    .sort((a, b) => a.localeCompare(b));
+  const accountFolders = [
+    { key: 'all', label: 'All', count: accounts.filter((account) => !isAccountInBannedFolder(account, nowMs)).length },
+    ...ownerFolders.map((owner) => ({
+      key: `owner:${owner}`,
+      label: owner,
+      count: accounts.filter((account) => !isAccountInBannedFolder(account, nowMs) && accountOwnerFolder(account) === owner).length,
+    })),
+    { key: 'banned', label: 'Banned', count: accounts.filter((account) => isAccountInBannedFolder(account, nowMs)).length },
+  ];
+  const selectedAccountFolder = accountFolders.some((folder) => folder.key === activeAccountFolder)
+    ? activeAccountFolder
+    : 'all';
+  const visibleAccounts = accounts.filter((account) => {
+    const inBannedFolder = isAccountInBannedFolder(account, nowMs);
+    if (selectedAccountFolder === 'banned') return inBannedFolder;
+    if (selectedAccountFolder === 'all') return !inBannedFolder;
+    return !inBannedFolder && selectedAccountFolder === `owner:${accountOwnerFolder(account)}`;
+  });
 
   return (
     <>
@@ -1063,15 +1113,31 @@ function DashboardView() {
 
       <section className="results-panel">
         <div className="section-heading">
-          <h2>Minecraft Accounts</h2>
-          <span className="pill">{accounts.length} registered</span>
+          <h2>{selectedAccountFolder === 'banned' ? 'Banned Accounts' : 'Minecraft Accounts'}</h2>
+          <span className="pill">{visibleAccounts.length} shown</span>
         </div>
-        {accounts.length ? (
+        <div className="folder-tabs">
+          {accountFolders.map((folder) => (
+            <button
+              key={folder.key}
+              className={selectedAccountFolder === folder.key ? 'active' : ''}
+              type="button"
+              onClick={() => setActiveAccountFolder(folder.key)}
+            >
+              <span>{folder.label}</span>
+              <small>{folder.count}</small>
+            </button>
+          ))}
+        </div>
+        {visibleAccounts.length ? (
           <div className="account-grid">
-            {accounts.map((account) => {
+            {visibleAccounts.map((account) => {
               const displayStatus = displayAccountStatus(account, nowMs);
               const banRemainingMs = displayStatus === 'banned' && account.ban_until
                 ? Date.parse(account.ban_until) - nowMs
+                : null;
+              const folderRemainingMs = displayStatus === 'banned' && account.banned_folder_available_at && !isAccountInBannedFolder(account, nowMs)
+                ? Date.parse(account.banned_folder_available_at) - nowMs
                 : null;
               return (
                 <article className="account-card" key={account.id}>
@@ -1104,6 +1170,12 @@ function DashboardView() {
                         <dd>{formatFullDuration(banRemainingMs)}</dd>
                       </div>
                     ) : null}
+                    {folderRemainingMs != null ? (
+                      <div>
+                        <dt>Banned Folder</dt>
+                        <dd>{formatFullDuration(folderRemainingMs)}</dd>
+                      </div>
+                    ) : null}
                     {displayStatus === 'banned' && account.ban_reason ? (
                       <div className="wide-row">
                         <dt>Reason</dt>
@@ -1126,11 +1198,18 @@ function DashboardView() {
                     </div>
                   </dl>
 
-                  {canManageUsers ? (
+                  {canManageUsers || canManageAccounts ? (
                     <div className="account-controls">
                       <div className="account-action-row">
-                        <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
-                        <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
+                        {canManageUsers ? (
+                          <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
+                        ) : null}
+                        {canManageAccounts && displayStatus === 'banned' && !isAccountInBannedFolder(account, nowMs) ? (
+                          <button className="btn secondary compact" type="button" onClick={() => moveMinecraftAccountToBannedFolder(account)}>Move to Banned</button>
+                        ) : null}
+                        {canManageUsers ? (
+                          <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}
@@ -1139,7 +1218,7 @@ function DashboardView() {
             })}
           </div>
         ) : (
-          <div className="empty-cell">No accounts registered</div>
+          <div className="empty-cell">No accounts in this folder</div>
         )}
       </section>
 
