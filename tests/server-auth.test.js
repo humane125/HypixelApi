@@ -567,7 +567,7 @@ test('dashboard websocket pushes account status changes from mod websocket', asy
   }
 });
 
-test('dashboard account list marks stale heartbeat accounts offline', async () => {
+test('dashboard account list marks stale live heartbeat accounts offline', async () => {
   const { db, server } = createTestServerWithOptions({
     accountHeartbeatWindowMs: 30_000,
   });
@@ -575,7 +575,7 @@ test('dashboard account list marks stale heartbeat accounts offline', async () =
   try {
     const cookie = await loginDashboard(baseUrl);
     const stale = new Date(Date.now() - 120_000).toISOString();
-    db.prepare(`
+    const insertAccount = db.prepare(`
       INSERT INTO minecraft_accounts (
         label,
         minecraft_uuid,
@@ -588,15 +588,20 @@ test('dashboard account list marks stale heartbeat accounts offline', async () =
         created_at,
         updated_at
       )
-      VALUES ('Stale', '00000000-0000-0000-0000-000000000012', 'StalePlayer', 1, 'active', '', ?, ?, ?, ?)
-    `).run(stale, stale, stale, stale);
+      VALUES (?, ?, ?, 1, ?, '', ?, ?, ?, ?)
+    `);
+    insertAccount.run('Stale Active', '00000000-0000-0000-0000-000000000012', 'StaleActivePlayer', 'active', stale, stale, stale, stale);
+    insertAccount.run('Stale Hypixel', '00000000-0000-0000-0000-000000000013', 'StaleHypixelPlayer', 'hypixel', stale, stale, stale, stale);
 
     const listed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
       headers: { Cookie: cookie },
     });
     assert.strictEqual(listed.status, 200);
-    const account = (await listed.json()).accounts.find((row) => row.minecraft_username === 'StalePlayer');
-    assert.strictEqual(account.status, 'offline');
+    const accounts = (await listed.json()).accounts;
+    const activeAccount = accounts.find((row) => row.minecraft_username === 'StaleActivePlayer');
+    const hypixelAccount = accounts.find((row) => row.minecraft_username === 'StaleHypixelPlayer');
+    assert.strictEqual(activeAccount.status, 'offline');
+    assert.strictEqual(hypixelAccount.status, 'offline');
   } finally {
     await close(server);
   }

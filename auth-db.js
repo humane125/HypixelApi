@@ -485,7 +485,7 @@ function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindow
     };
   }
   if (
-    account.status === 'active'
+    ['active', 'hypixel'].includes(account.status)
     && account.last_seen_at
     && now - Date.parse(account.last_seen_at) > heartbeatWindowMs
   ) {
