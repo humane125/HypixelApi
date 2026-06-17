@@ -744,13 +744,17 @@ function attachModWebSocketServer(server, {
 
         try {
           const profile = await getMinecraftProfileByUsername(message.username, fetchImpl);
-          authContext = auth;
-          account = upsertMinecraftAccountFromMod(db, {
+          const registeredAccount = upsertMinecraftAccountFromMod(db, {
             minecraftUuid: profile.id,
             minecraftUsername: profile.name,
             ownerUserId: auth.user.id,
             clientVersion: message.clientVersion || null,
           });
+          if (!registeredAccount || !registeredAccount.id) {
+            throw new Error('Account registration failed');
+          }
+          authContext = auth;
+          account = registeredAccount;
           modConnections.register(socket, auth, account);
           auditRequest(db, auth, req, 'mod.connect', { accountId: account.id, username: profile.name });
           dashboardAccounts?.broadcast();
@@ -760,8 +764,25 @@ function attachModWebSocketServer(server, {
             user: auth.user,
           });
         } catch (err) {
-          sendSocketJson(socket, { type: 'error', code: 'profile_lookup_failed', message: err.message });
+          authContext = null;
+          account = null;
+          const message = err && err.message ? err.message : 'Profile lookup failed';
+          const code = message === 'Account registration failed' ? 'account_registration_failed' : 'profile_lookup_failed';
+          sendSocketJson(socket, { type: 'error', code, message });
+          setImmediate(() => socket.close(1011, code));
         }
+        return;
+      }
+
+      if (!account || !account.id) {
+        authContext = null;
+        account = null;
+        sendSocketJson(socket, {
+          type: 'error',
+          code: 'account_unavailable',
+          message: 'Authenticated Minecraft account is unavailable; reconnect the mod.',
+        });
+        setImmediate(() => socket.close(1011, 'account_unavailable'));
         return;
       }
 

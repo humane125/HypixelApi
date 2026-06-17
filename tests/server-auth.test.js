@@ -223,6 +223,58 @@ test('mod websocket rejects api keys without mod connect scope', async () => {
   }
 });
 
+test('mod websocket does not crash when account registration returns no account', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_missing_account_socket',
+  });
+  db.exec(`
+    CREATE TRIGGER test_delete_mod_account_after_insert
+    AFTER INSERT ON minecraft_accounts
+    BEGIN
+      DELETE FROM minecraft_accounts WHERE id = NEW.id;
+    END
+  `);
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000019',
+        name: 'MissingAccountPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_missing_account_socket',
+      username: 'MissingAccountPlayer',
+    }));
+    const failed = await waitForSocketMessage(socket);
+    assert.strictEqual(failed.type, 'error');
+    assert.strictEqual(failed.code, 'account_registration_failed');
+
+    const closed = await new Promise((resolve, reject) => {
+      socket.once('close', () => resolve(true));
+      socket.once('error', reject);
+      setTimeout(() => reject(new Error('Timed out waiting for socket close')), 1500);
+    });
+    assert.strictEqual(closed, true);
+  } finally {
+    closeSocketSilently(socket);
+    await close(server);
+  }
+});
+
 test('mod websocket accepts active and offline status messages', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
