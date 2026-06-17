@@ -716,6 +716,13 @@ function attachModWebSocketServer(server, {
   modSocketServer.on('connection', (socket, req) => {
     let authContext = null;
     let account = null;
+    socket.on('close', () => {
+      if (!authContext || !account || !account.id) {
+        return;
+      }
+      account = recordMinecraftAccountConnectionStatus(db, account.id, 'offline');
+      dashboardAccounts?.broadcast();
+    });
 
     socket.on('message', async (rawMessage) => {
       let message;

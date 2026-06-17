@@ -325,6 +325,62 @@ test('mod websocket accepts active and offline status messages', async () => {
   }
 });
 
+test('mod websocket marks account offline when the socket closes without an offline message', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_socket_close',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000020',
+        name: 'ClosedSocketPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_socket_close',
+      username: 'ClosedSocketPlayer',
+    }));
+    const authed = await waitForSocketMessage(socket);
+    assert.strictEqual(authed.type, 'auth_ok');
+
+    socket.send(JSON.stringify({ type: 'hypixel' }));
+    const hypixel = await waitForSocketMessage(socket);
+    assert.strictEqual(hypixel.status, 'hypixel');
+
+    socket.close();
+    await new Promise((resolve, reject) => {
+      socket.once('close', resolve);
+      socket.once('error', reject);
+      setTimeout(() => reject(new Error('Timed out waiting for socket close')), 1500);
+    });
+
+    let account = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(authed.account.id);
+    const deadline = Date.now() + 1500;
+    while (account.status !== 'offline' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      account = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(authed.account.id);
+    }
+    assert.strictEqual(account.status, 'offline');
+  } finally {
+    closeSocketSilently(socket);
+    await close(server);
+  }
+});
+
 test('mod websocket closes cleanly when the dashboard deleted its account while connected', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
