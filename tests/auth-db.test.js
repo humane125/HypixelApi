@@ -9,6 +9,8 @@ const {
   createMinecraftAccount,
   listMinecraftAccounts,
   recordMinecraftAccountConnectionStatus,
+  updateMinecraftAccountProxy,
+  getMinecraftAccountProxyForOwner,
   updateMinecraftAccountStatus,
   markMinecraftAccountBannedFoldered,
   deleteMinecraftAccount,
@@ -147,6 +149,85 @@ test('timed mod bans store metadata and clear from listed accounts after expiry'
 	assert.strictEqual(listedAfterBan[0].ban_reason, null);
 	assert.strictEqual(listedAfterBan[0].ban_id, null);
 	assert.strictEqual(listedAfterBan[0].ban_until, null);
+});
+
+test('minecraft account proxy settings are listed without passwords', () => {
+  const db = createDatabase(':memory:');
+  const user = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    label: 'Proxy account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000041',
+    minecraftUsername: 'ProxyPlayer',
+    ownerUserId: user.id,
+  });
+
+  const updated = updateMinecraftAccountProxy(db, account.id, {
+    proxyEnabled: true,
+    proxyType: 'socks5',
+    proxyHost: 'proxy.example.com',
+    proxyPort: '1080',
+    proxyUsername: 'proxy-user',
+    proxyPassword: 'secret-pass',
+  });
+
+  assert.strictEqual(updated.proxy_enabled, 1);
+  assert.strictEqual(updated.proxy_type, 'SOCKS5');
+  assert.strictEqual(updated.proxy_host, 'proxy.example.com');
+  assert.strictEqual(updated.proxy_port, 1080);
+  assert.strictEqual(updated.proxy_username, 'proxy-user');
+  assert.strictEqual(updated.proxy_has_password, 1);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(updated, 'proxy_password'), false);
+
+  const listed = listMinecraftAccounts(db)[0];
+  assert.strictEqual(listed.proxy_enabled, 1);
+  assert.strictEqual(listed.proxy_type, 'SOCKS5');
+  assert.strictEqual(listed.proxy_host, 'proxy.example.com');
+  assert.strictEqual(listed.proxy_port, 1080);
+  assert.strictEqual(listed.proxy_username, 'proxy-user');
+  assert.strictEqual(listed.proxy_has_password, 1);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(listed, 'proxy_password'), false);
+});
+
+test('mod proxy lookup is owner scoped and includes the saved password', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const other = createUser(db, { username: 'other', role: 'manager' });
+  const account = createMinecraftAccount(db, {
+    label: 'Proxy lookup account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000042',
+    minecraftUsername: 'LookupProxyPlayer',
+    ownerUserId: owner.id,
+  });
+
+  updateMinecraftAccountProxy(db, account.id, {
+    proxyEnabled: true,
+    proxyType: 'SOCKS5',
+    proxyHost: '127.0.0.1',
+    proxyPort: 1080,
+    proxyUsername: 'local-user',
+    proxyPassword: 'local-pass',
+  });
+
+  const proxy = getMinecraftAccountProxyForOwner(db, {
+    ownerUserId: owner.id,
+    minecraftUuid: '00000000000000000000000000000042',
+  });
+  assert.deepStrictEqual(proxy, {
+    accountId: account.id,
+    minecraftUuid: '00000000-0000-0000-0000-000000000042',
+    minecraftUsername: 'LookupProxyPlayer',
+    enabled: true,
+    type: 'SOCKS5',
+    host: '127.0.0.1',
+    port: 1080,
+    username: 'local-user',
+    password: 'local-pass',
+  });
+
+  assert.strictEqual(getMinecraftAccountProxyForOwner(db, {
+    ownerUserId: other.id,
+    minecraftUsername: 'LookupProxyPlayer',
+  }), null);
 });
 
 test('banned accounts are foldered after 8 hours or manual move', () => {

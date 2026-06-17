@@ -95,6 +95,12 @@ function migrateDatabase(db) {
       ban_until TEXT,
       ban_id TEXT,
       banned_foldered_at TEXT,
+      proxy_enabled INTEGER NOT NULL DEFAULT 0,
+      proxy_type TEXT NOT NULL DEFAULT 'SOCKS5',
+      proxy_host TEXT,
+      proxy_port INTEGER,
+      proxy_username TEXT,
+      proxy_password TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -151,6 +157,24 @@ function migrateDatabase(db) {
   }
   if (!accountColumns.includes('banned_foldered_at')) {
     db.exec('ALTER TABLE minecraft_accounts ADD COLUMN banned_foldered_at TEXT');
+  }
+  if (!accountColumns.includes('proxy_enabled')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN proxy_enabled INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!accountColumns.includes('proxy_type')) {
+    db.exec("ALTER TABLE minecraft_accounts ADD COLUMN proxy_type TEXT NOT NULL DEFAULT 'SOCKS5'");
+  }
+  if (!accountColumns.includes('proxy_host')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN proxy_host TEXT');
+  }
+  if (!accountColumns.includes('proxy_port')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN proxy_port INTEGER');
+  }
+  if (!accountColumns.includes('proxy_username')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN proxy_username TEXT');
+  }
+  if (!accountColumns.includes('proxy_password')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN proxy_password TEXT');
   }
 }
 
@@ -440,7 +464,7 @@ function createMinecraftAccount(db, {
     VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
   `).run(cleanLabel, cleanUuid, cleanUsername, ownerUserId, String(notes || ''), timestamp, timestamp);
 
-  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid);
+  return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid));
 }
 
 function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindowMs = DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS } = {}) {
@@ -499,6 +523,59 @@ function cleanOptionalText(value) {
   return text || null;
 }
 
+function publicMinecraftAccount(account) {
+  if (!account) return account;
+  const { proxy_password: proxyPassword, ...safeAccount } = account;
+  return {
+    ...safeAccount,
+    proxy_has_password: proxyPassword ? 1 : 0,
+  };
+}
+
+function normalizeProxyType(value) {
+  const type = String(value || 'SOCKS5').trim().toUpperCase();
+  if (!['SOCKS5', 'SOCKS4', 'HTTP'].includes(type)) {
+    throw new Error('Invalid proxy type');
+  }
+  return type;
+}
+
+function normalizeProxyPort(value) {
+  if (value == null || value === '') return null;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('Invalid proxy port');
+  }
+  return port;
+}
+
+function normalizeProxySettings(settings = {}, existing = {}) {
+  const enabled = Boolean(settings.proxyEnabled);
+  const type = normalizeProxyType(settings.proxyType || existing.proxy_type || 'SOCKS5');
+  const host = cleanOptionalText(settings.proxyHost);
+  const port = normalizeProxyPort(settings.proxyPort);
+  const username = cleanOptionalText(settings.proxyUsername);
+  const password = Object.prototype.hasOwnProperty.call(settings, 'proxyPassword')
+    ? cleanOptionalText(settings.proxyPassword)
+    : (existing.proxy_password || null);
+
+  if (enabled && !host) {
+    throw new Error('Proxy host is required when proxy is enabled');
+  }
+  if (enabled && !port) {
+    throw new Error('Proxy port is required when proxy is enabled');
+  }
+
+  return {
+    proxy_enabled: enabled ? 1 : 0,
+    proxy_type: type,
+    proxy_host: enabled ? host : null,
+    proxy_port: enabled ? port : null,
+    proxy_username: enabled ? username : null,
+    proxy_password: enabled ? password : null,
+  };
+}
+
 function normalizeFutureIso(value, timestamp) {
   const text = cleanOptionalText(value);
   if (!text) return null;
@@ -516,7 +593,7 @@ function listMinecraftAccounts(db, options = {}) {
     FROM minecraft_accounts
     LEFT JOIN users ON users.id = minecraft_accounts.owner_user_id
     ORDER BY minecraft_accounts.created_at DESC
-  `).all().map((account) => applyComputedAccountStatus(account, options));
+  `).all().map((account) => publicMinecraftAccount(applyComputedAccountStatus(account, options)));
 }
 
 function normalizeMinecraftUuid(uuid) {
@@ -578,7 +655,7 @@ function upsertMinecraftAccountFromMod(db, {
       timestamp,
       existing.id
     );
-    return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(existing.id);
+    return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(existing.id));
   }
 
   const result = db.prepare(`
@@ -598,7 +675,7 @@ function upsertMinecraftAccountFromMod(db, {
     VALUES (?, ?, ?, ?, 'active', '', ?, ?, ?, ?, ?)
   `).run(cleanUsername, cleanUuid, cleanUsername, ownerUserId, timestamp, timestamp, clientVersion, timestamp, timestamp);
 
-  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid);
+  return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid));
 }
 
 function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
@@ -629,7 +706,7 @@ function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
     accountId
   );
 
-  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+  return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId));
 }
 
 function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {}, { now = null } = {}) {
@@ -683,7 +760,71 @@ function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {},
     accountId
   );
 
-  return db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+  return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId));
+}
+
+function updateMinecraftAccountProxy(db, accountId, settings = {}) {
+  const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
+  if (!existing) return null;
+  const proxy = normalizeProxySettings(settings, existing);
+  const timestamp = nowIso();
+
+  db.prepare(`
+    UPDATE minecraft_accounts
+    SET proxy_enabled = ?,
+        proxy_type = ?,
+        proxy_host = ?,
+        proxy_port = ?,
+        proxy_username = ?,
+        proxy_password = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(
+    proxy.proxy_enabled,
+    proxy.proxy_type,
+    proxy.proxy_host,
+    proxy.proxy_port,
+    proxy.proxy_username,
+    proxy.proxy_password,
+    timestamp,
+    accountId
+  );
+
+  return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId));
+}
+
+function getMinecraftAccountProxyForOwner(db, {
+  ownerUserId,
+  minecraftUuid = null,
+  minecraftUsername = null,
+}) {
+  if (!ownerUserId) throw new Error('ownerUserId is required');
+  let account = null;
+  if (minecraftUuid) {
+    account = db.prepare(`
+      SELECT * FROM minecraft_accounts
+      WHERE owner_user_id = ? AND minecraft_uuid = ?
+    `).get(ownerUserId, normalizeMinecraftUuid(minecraftUuid));
+  }
+  if (!account && minecraftUsername) {
+    account = db.prepare(`
+      SELECT * FROM minecraft_accounts
+      WHERE owner_user_id = ? AND lower(minecraft_username) = lower(?)
+    `).get(ownerUserId, String(minecraftUsername || '').trim());
+  }
+  if (!account) return null;
+
+  return {
+    accountId: account.id,
+    minecraftUuid: account.minecraft_uuid,
+    minecraftUsername: account.minecraft_username,
+    enabled: Boolean(account.proxy_enabled),
+    type: account.proxy_type || 'SOCKS5',
+    host: account.proxy_host,
+    port: account.proxy_port,
+    username: account.proxy_username || '',
+    password: account.proxy_password || '',
+  };
 }
 
 function updateMinecraftAccountStatus(db, accountId, { status, banReason = null, banUntil = null, banId = null }) {
@@ -724,7 +865,7 @@ function markMinecraftAccountBannedFoldered(db, accountId, { now = null } = {}) 
     LEFT JOIN users ON users.id = minecraft_accounts.owner_user_id
     WHERE minecraft_accounts.id = ?
   `).get(accountId);
-  return account ? applyComputedAccountStatus(account, { now: Date.parse(timestamp) }) : null;
+  return account ? publicMinecraftAccount(applyComputedAccountStatus(account, { now: Date.parse(timestamp) })) : null;
 }
 
 function deleteMinecraftAccount(db, accountId) {
@@ -769,6 +910,8 @@ module.exports = {
   upsertMinecraftAccountFromMod,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
+  updateMinecraftAccountProxy,
+  getMinecraftAccountProxyForOwner,
   updateMinecraftAccountStatus,
   markMinecraftAccountBannedFoldered,
   deleteMinecraftAccount,

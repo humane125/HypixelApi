@@ -683,6 +683,161 @@ test('dashboard account endpoints create and list registered minecraft accounts'
   }
 });
 
+test('dashboard can save account proxy settings without exposing proxy passwords in account lists', async () => {
+  const { server } = createTestServer();
+  const baseUrl = await listen(server);
+  try {
+    const cookie = await loginDashboard(baseUrl);
+
+    const created = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        label: 'Proxy Account',
+        minecraftUuid: '00000000-0000-0000-0000-000000000051',
+        minecraftUsername: 'DashboardProxyPlayer',
+      }),
+    });
+    assert.strictEqual(created.status, 201);
+    const accountId = (await created.json()).account.id;
+
+    const saved = await fetch(`${baseUrl}/api/dashboard/accounts/proxy`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        accountId,
+        proxyEnabled: true,
+        proxyType: 'socks5',
+        proxyHost: 'proxy.example.com',
+        proxyPort: '1080',
+        proxyUsername: 'dash-user',
+        proxyPassword: 'dash-secret',
+      }),
+    });
+    assert.strictEqual(saved.status, 200);
+    const savedBody = await saved.json();
+    assert.strictEqual(savedBody.account.proxy_enabled, 1);
+    assert.strictEqual(savedBody.account.proxy_type, 'SOCKS5');
+    assert.strictEqual(savedBody.account.proxy_host, 'proxy.example.com');
+    assert.strictEqual(savedBody.account.proxy_port, 1080);
+    assert.strictEqual(savedBody.account.proxy_username, 'dash-user');
+    assert.strictEqual(savedBody.account.proxy_has_password, 1);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(savedBody.account, 'proxy_password'), false);
+
+    const listed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: cookie },
+    });
+    assert.strictEqual(listed.status, 200);
+    const listedAccount = (await listed.json()).accounts.find((account) => account.id === accountId);
+    assert.strictEqual(listedAccount.proxy_has_password, 1);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(listedAccount, 'proxy_password'), false);
+  } finally {
+    await close(server);
+  }
+});
+
+test('mod account proxy lookup is authenticated and scoped to the api key owner', async () => {
+  const { db, owner, server } = createTestServer();
+  const other = createUser(db, { username: 'other', role: 'manager' });
+  setUserPassword(db, other.id, 'other-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'owner mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_owner_mod_proxy',
+  });
+  createApiKey(db, {
+    userId: other.id,
+    name: 'other mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_other_mod_proxy',
+  });
+  const baseUrl = await listen(server);
+  try {
+    const cookie = await loginDashboard(baseUrl);
+    const created = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        label: 'Lookup Proxy Account',
+        minecraftUuid: '00000000-0000-0000-0000-000000000052',
+        minecraftUsername: 'LookupDashboardProxy',
+      }),
+    });
+    assert.strictEqual(created.status, 201);
+    const accountId = (await created.json()).account.id;
+
+    const saved = await fetch(`${baseUrl}/api/dashboard/accounts/proxy`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        accountId,
+        proxyEnabled: true,
+        proxyType: 'SOCKS5',
+        proxyHost: '127.0.0.1',
+        proxyPort: 1080,
+        proxyUsername: 'mod-user',
+        proxyPassword: 'mod-secret',
+      }),
+    });
+    assert.strictEqual(saved.status, 200);
+
+    const denied = await fetch(`${baseUrl}/api/mod/account-proxy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minecraftUsername: 'LookupDashboardProxy' }),
+    });
+    assert.strictEqual(denied.status, 401);
+
+    const otherLookup = await fetch(`${baseUrl}/api/mod/account-proxy`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer hpx_test_other_mod_proxy',
+      },
+      body: JSON.stringify({ minecraftUsername: 'LookupDashboardProxy' }),
+    });
+    assert.strictEqual(otherLookup.status, 404);
+
+    const lookup = await fetch(`${baseUrl}/api/mod/account-proxy`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer hpx_test_owner_mod_proxy',
+      },
+      body: JSON.stringify({ minecraftUuid: '00000000000000000000000000000052' }),
+    });
+    assert.strictEqual(lookup.status, 200);
+    assert.deepStrictEqual(await lookup.json(), {
+      proxy: {
+        accountId,
+        minecraftUuid: '00000000-0000-0000-0000-000000000052',
+        minecraftUsername: 'LookupDashboardProxy',
+        enabled: true,
+        type: 'SOCKS5',
+        host: '127.0.0.1',
+        port: 1080,
+        username: 'mod-user',
+        password: 'mod-secret',
+      },
+    });
+  } finally {
+    await close(server);
+  }
+});
+
 test('admin can issue a new api key for an existing dashboard user and only the raw key authenticates', async () => {
   const { server } = createTestServer();
   const baseUrl = await listen(server);

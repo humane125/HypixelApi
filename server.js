@@ -32,6 +32,8 @@ const {
   upsertMinecraftAccountFromMod,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
+  updateMinecraftAccountProxy,
+  getMinecraftAccountProxyForOwner,
   updateMinecraftAccountStatus,
   markMinecraftAccountBannedFoldered,
   deleteMinecraftAccount,
@@ -1002,6 +1004,39 @@ function createAppServer(options = {}) {
       return;
     }
 
+    if (pathname === '/api/mod/account-proxy' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = authorize(req, parsedUrl, body, ['mod:connect']);
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        if (!body.minecraftUuid && !body.minecraftUsername) {
+          writeJson(res, 400, { error: 'minecraftUuid or minecraftUsername is required' });
+          return;
+        }
+        const proxy = getMinecraftAccountProxyForOwner(db, {
+          ownerUserId: access.auth.user.id,
+          minecraftUuid: body.minecraftUuid,
+          minecraftUsername: body.minecraftUsername,
+        });
+        if (!proxy) {
+          writeJson(res, 404, { error: 'Minecraft account proxy not found' });
+          return;
+        }
+        auditRequest(db, access.auth, req, 'mod.account_proxy.lookup', {
+          accountId: proxy.accountId,
+          minecraftUsername: proxy.minecraftUsername,
+          proxyEnabled: proxy.enabled,
+        });
+        writeJson(res, 200, { proxy });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
     if (pathname === '/api/dashboard/login' && req.method === 'POST') {
       try {
         const body = await parseRequestBody(req);
@@ -1106,6 +1141,43 @@ function createAppServer(options = {}) {
         });
         dashboardAccounts?.broadcast();
         writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts/proxy' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardAccountManager(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const account = updateMinecraftAccountProxy(db, body.accountId, {
+          proxyEnabled: body.proxyEnabled,
+          proxyType: body.proxyType,
+          proxyHost: body.proxyHost,
+          proxyPort: body.proxyPort,
+          proxyUsername: body.proxyUsername,
+          proxyPassword: body.proxyPassword,
+        });
+        if (!account) {
+          writeJson(res, 404, { error: 'Minecraft account not found' });
+          return;
+        }
+        auditRequest(db, access.auth, req, 'minecraft_account.proxy', {
+          accountId: account.id,
+          proxyEnabled: Boolean(account.proxy_enabled),
+          proxyType: account.proxy_type,
+          proxyHost: account.proxy_host,
+          proxyPort: account.proxy_port,
+          proxyUsername: account.proxy_username,
+          proxyHasPassword: Boolean(account.proxy_has_password),
+        });
+        dashboardAccounts?.broadcast();
+        writeJson(res, 200, { account });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
       }

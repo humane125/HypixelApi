@@ -491,6 +491,49 @@ Allowed statuses:
 - `locked`
 - `banned`
 
+### `POST /api/dashboard/accounts/proxy`
+
+Requires dashboard role `owner` or `manager`.
+
+Saves proxy settings for one Minecraft account. Dashboard account lists return proxy metadata, but never return `proxy_password`; use `proxy_has_password` to show whether a password is already stored.
+
+Request:
+
+```json
+{
+  "accountId": 1,
+  "proxyEnabled": true,
+  "proxyType": "SOCKS5",
+  "proxyHost": "127.0.0.1",
+  "proxyPort": 1080,
+  "proxyUsername": "optional-user",
+  "proxyPassword": "optional-password"
+}
+```
+
+Response:
+
+```json
+{
+  "account": {
+    "id": 1,
+    "minecraft_username": "PlayerOne",
+    "proxy_enabled": 1,
+    "proxy_type": "SOCKS5",
+    "proxy_host": "127.0.0.1",
+    "proxy_port": 1080,
+    "proxy_username": "optional-user",
+    "proxy_has_password": 1
+  }
+}
+```
+
+Supported proxy types:
+
+- `SOCKS5`
+- `SOCKS4`
+- `HTTP`
+
 ### `GET /api/dashboard/api-keys`
 
 Requires dashboard role `owner`.
@@ -676,6 +719,46 @@ The server replies:
 ```
 
 Accounts with stale `last_seen_at` are shown as `offline` in dashboard account listings.
+
+## Mod Account Proxy Lookup
+
+### `POST /api/mod/account-proxy`
+
+Requires an API key with `mod:connect`. The lookup is scoped to the dashboard user that owns the API key, so one user cannot fetch another user's account proxy settings.
+
+Request by UUID or username:
+
+```json
+{
+  "minecraftUuid": "00000000-0000-0000-0000-000000000001"
+}
+```
+
+```json
+{
+  "minecraftUsername": "PlayerOne"
+}
+```
+
+Response:
+
+```json
+{
+  "proxy": {
+    "accountId": 1,
+    "minecraftUuid": "00000000-0000-0000-0000-000000000001",
+    "minecraftUsername": "PlayerOne",
+    "enabled": true,
+    "type": "SOCKS5",
+    "host": "127.0.0.1",
+    "port": 1080,
+    "username": "optional-user",
+    "password": "optional-password"
+  }
+}
+```
+
+Proxy passwords are returned only by this mod-authenticated lookup endpoint. They are not included in dashboard account lists or audit metadata.
 
 ## Legacy `GET /api/scan`
 
