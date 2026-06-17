@@ -804,7 +804,7 @@ tbody tr:hover {
 
 .proxy-modal-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
   padding: 16px 18px 18px;
 }
@@ -816,7 +816,7 @@ tbody tr:hover {
 
 .modal-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
   padding-top: 4px;
 }

@@ -664,14 +664,6 @@ function ProxyConfigModal({ account, draft, onChange, onSave, onClose }) {
           <button type="button" aria-label="Close proxy settings" onClick={onClose}>x</button>
         </div>
         <form className="proxy-modal-form" onSubmit={(event) => onSave(event, account)}>
-          <label className="proxy-toggle modal-toggle">
-            <input
-              type="checkbox"
-              checked={draft.proxyEnabled}
-              onChange={(event) => onChange(account.id, 'proxyEnabled', event.target.checked)}
-            />
-            <span>Proxy Enabled</span>
-          </label>
           <Field label="Type">
             <select
               value={draft.proxyType}
@@ -1004,7 +996,7 @@ function DashboardView() {
         method: 'POST',
         body: JSON.stringify({
           accountId: account.id,
-          proxyEnabled: draft.proxyEnabled,
+          proxyEnabled: true,
           proxyType: draft.proxyType,
           proxyHost: draft.proxyHost,
           proxyPort: draft.proxyPort,
