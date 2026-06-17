@@ -651,6 +651,80 @@ function TooltipModal({ item, onClose }) {
   );
 }
 
+function ProxyConfigModal({ account, draft, onChange, onSave, onClose }) {
+  return (
+    <div className="modal">
+      <button className="modal-scrim" type="button" aria-label="Close proxy settings" onClick={onClose} />
+      <section className="proxy-modal" aria-modal="true" role="dialog" aria-labelledby="proxy-modal-title">
+        <div className="modal-head">
+          <div>
+            <span className="modal-eyebrow">Account Proxy</span>
+            <h3 id="proxy-modal-title">{account.minecraft_username}</h3>
+          </div>
+          <button type="button" aria-label="Close proxy settings" onClick={onClose}>x</button>
+        </div>
+        <form className="proxy-modal-form" onSubmit={(event) => onSave(event, account)}>
+          <label className="proxy-toggle modal-toggle">
+            <input
+              type="checkbox"
+              checked={draft.proxyEnabled}
+              onChange={(event) => onChange(account.id, 'proxyEnabled', event.target.checked)}
+            />
+            <span>Proxy Enabled</span>
+          </label>
+          <Field label="Type">
+            <select
+              value={draft.proxyType}
+              onChange={(event) => onChange(account.id, 'proxyType', event.target.value)}
+            >
+              <option value="SOCKS5">SOCKS5</option>
+              <option value="SOCKS4">SOCKS4</option>
+              <option value="HTTP">HTTP</option>
+            </select>
+          </Field>
+          <Field label="Host">
+            <input
+              value={draft.proxyHost}
+              onChange={(event) => onChange(account.id, 'proxyHost', event.target.value)}
+              placeholder="127.0.0.1"
+            />
+          </Field>
+          <Field label="Port">
+            <input
+              type="number"
+              min="1"
+              max="65535"
+              value={draft.proxyPort}
+              onChange={(event) => onChange(account.id, 'proxyPort', event.target.value)}
+              placeholder="1080"
+            />
+          </Field>
+          <Field label="Username">
+            <input
+              value={draft.proxyUsername}
+              onChange={(event) => onChange(account.id, 'proxyUsername', event.target.value)}
+              placeholder="Optional"
+            />
+          </Field>
+          <Field label="Password">
+            <input
+              type="password"
+              value={draft.proxyPassword}
+              onChange={(event) => onChange(account.id, 'proxyPassword', event.target.value)}
+              placeholder={account.proxy_has_password ? 'Password set; leave blank to keep' : 'Optional'}
+              autoComplete="new-password"
+            />
+          </Field>
+          <div className="modal-actions">
+            <button className="btn secondary" type="button" onClick={onClose}>Cancel</button>
+            <button className="btn primary" type="submit">Set Proxy</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function DashboardView() {
   const [me, setMe] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -664,6 +738,7 @@ function DashboardView() {
   const [issuedKey, setIssuedKey] = useState(null);
   const [roleDrafts, setRoleDrafts] = useState({});
   const [proxyDrafts, setProxyDrafts] = useState({});
+  const [activeProxyAccountId, setActiveProxyAccountId] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
   const [activeAccountFolder, setActiveAccountFolder] = useState('all');
 
@@ -689,6 +764,7 @@ function DashboardView() {
       setMe(null);
       setAccounts([]);
       setProxyDrafts({});
+      setActiveProxyAccountId(null);
       setApiKeys([]);
       setDashboardUsers([]);
       setStatusMessage(err.message);
@@ -774,6 +850,7 @@ function DashboardView() {
     setMe(null);
     setAccounts([]);
     setProxyDrafts({});
+    setActiveProxyAccountId(null);
     setApiKeys([]);
     setDashboardUsers([]);
     setIssuedKey(null);
@@ -800,6 +877,14 @@ function DashboardView() {
         [field]: value,
       },
     }));
+  }, []);
+
+  const openProxyModal = useCallback((account) => {
+    setProxyDrafts((current) => ({
+      ...current,
+      [account.id]: current[account.id] || proxyDraftFromAccount(account),
+    }));
+    setActiveProxyAccountId(account.id);
   }, []);
 
   const toggleScope = useCallback((scope) => {
@@ -929,6 +1014,7 @@ function DashboardView() {
       });
       setStatusMessage(`Proxy saved for ${account.minecraft_username}`);
       loadDashboard();
+      setActiveProxyAccountId(null);
     } catch (err) {
       setStatusMessage(err.message);
     }
@@ -1009,6 +1095,7 @@ function DashboardView() {
   const selectedAccountFolder = accountFolders.some((folder) => folder.key === activeAccountFolder)
     ? activeAccountFolder
     : 'all';
+  const activeProxyAccount = accounts.find((account) => account.id === activeProxyAccountId) || null;
   const visibleAccounts = accounts.filter((account) => {
     const inBannedFolder = isAccountInBannedFolder(account, nowMs);
     if (selectedAccountFolder === 'banned') return inBannedFolder;
@@ -1193,7 +1280,6 @@ function DashboardView() {
               const folderRemainingMs = displayStatus === 'banned' && account.banned_folder_available_at && !isAccountInBannedFolder(account, nowMs)
                 ? Date.parse(account.banned_folder_available_at) - nowMs
                 : null;
-              const proxyDraft = proxyDrafts[account.id] || proxyDraftFromAccount(account);
               return (
                 <article className="account-card" key={account.id}>
                   <div className="account-card-head">
@@ -1259,60 +1345,18 @@ function DashboardView() {
 
                   {canManageUsers || canManageAccounts ? (
                     <div className="account-controls">
-                      {canManageAccounts ? (
-                        <form className="account-proxy-form" onSubmit={(event) => saveAccountProxy(event, account)}>
-                          <label className="proxy-toggle">
-                            <input
-                              type="checkbox"
-                              checked={proxyDraft.proxyEnabled}
-                              onChange={(event) => updateProxyDraft(account.id, 'proxyEnabled', event.target.checked)}
-                            />
-                            <span>Proxy</span>
-                          </label>
-                          <select
-                            value={proxyDraft.proxyType}
-                            onChange={(event) => updateProxyDraft(account.id, 'proxyType', event.target.value)}
-                          >
-                            <option value="SOCKS5">SOCKS5</option>
-                            <option value="SOCKS4">SOCKS4</option>
-                            <option value="HTTP">HTTP</option>
-                          </select>
-                          <input
-                            value={proxyDraft.proxyHost}
-                            onChange={(event) => updateProxyDraft(account.id, 'proxyHost', event.target.value)}
-                            placeholder="Host"
-                          />
-                          <input
-                            type="number"
-                            min="1"
-                            max="65535"
-                            value={proxyDraft.proxyPort}
-                            onChange={(event) => updateProxyDraft(account.id, 'proxyPort', event.target.value)}
-                            placeholder="Port"
-                          />
-                          <input
-                            value={proxyDraft.proxyUsername}
-                            onChange={(event) => updateProxyDraft(account.id, 'proxyUsername', event.target.value)}
-                            placeholder="Username"
-                          />
-                          <input
-                            type="password"
-                            value={proxyDraft.proxyPassword}
-                            onChange={(event) => updateProxyDraft(account.id, 'proxyPassword', event.target.value)}
-                            placeholder={account.proxy_has_password ? 'Password set' : 'Password'}
-                          />
-                          <button className="btn secondary compact" type="submit">Save Proxy</button>
-                        </form>
-                      ) : null}
                       <div className="account-action-row">
                         {canManageUsers ? (
                           <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
                         ) : null}
-                        {canManageAccounts && displayStatus === 'banned' && !isAccountInBannedFolder(account, nowMs) ? (
-                          <button className="btn secondary compact" type="button" onClick={() => moveMinecraftAccountToBannedFolder(account)}>Move to Banned</button>
-                        ) : null}
                         {canManageUsers ? (
                           <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
+                        ) : null}
+                        {canManageAccounts && displayStatus === 'banned' && !isAccountInBannedFolder(account, nowMs) ? (
+                          <button className="btn secondary compact wide-action" type="button" onClick={() => moveMinecraftAccountToBannedFolder(account)}>Move to Banned</button>
+                        ) : null}
+                        {canManageAccounts ? (
+                          <button className="btn secondary compact wide-action" type="button" onClick={() => openProxyModal(account)}>Configure</button>
                         ) : null}
                       </div>
                     </div>
@@ -1363,6 +1407,16 @@ function DashboardView() {
           </table>
         </div>
       </section>
+      ) : null}
+
+      {canManageAccounts && activeProxyAccount ? (
+        <ProxyConfigModal
+          account={activeProxyAccount}
+          draft={proxyDrafts[activeProxyAccount.id] || proxyDraftFromAccount(activeProxyAccount)}
+          onChange={updateProxyDraft}
+          onSave={saveAccountProxy}
+          onClose={() => setActiveProxyAccountId(null)}
+        />
       ) : null}
     </>
   );

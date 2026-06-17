@@ -669,25 +669,6 @@ tbody tr:hover {
   gap: 8px;
 }
 
-.account-proxy-form {
-  display: grid;
-  grid-template-columns: 86px minmax(92px, 0.7fr) minmax(0, 1fr) 84px;
-  gap: 8px;
-  align-items: center;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.account-proxy-form input,
-.account-proxy-form select {
-  min-height: 36px;
-  padding: 8px 9px;
-}
-
-.account-proxy-form .btn {
-  grid-column: span 4;
-}
-
 .proxy-toggle {
   display: inline-flex;
   align-items: center;
@@ -713,9 +694,17 @@ tbody tr:hover {
 
 .account-action-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: center;
+}
+
+.account-action-row .btn {
+  width: 100%;
+}
+
+.wide-action {
+  grid-column: 1 / -1;
 }
 
 .offline {
@@ -767,6 +756,69 @@ tbody tr:hover {
   border: 1px solid var(--line);
   border-radius: 6px;
   box-shadow: 0 22px 70px rgba(0, 0, 0, 0.7);
+}
+
+.proxy-modal {
+  position: relative;
+  z-index: 11;
+  width: min(520px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow-y: auto;
+  background: #0e1014;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.7);
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head h3 {
+  margin: 3px 0 0;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.modal-eyebrow {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.modal-head button {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--muted);
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+
+.proxy-modal-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
+
+.proxy-modal-form .modal-toggle,
+.modal-actions {
+  grid-column: 1 / -1;
+}
+
+.modal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 4px;
 }
 
 .tooltip-head {
@@ -867,13 +919,13 @@ tbody tr:hover {
 
   .form-actions,
   .status-controls,
-  .role-controls,
-  .account-proxy-form {
+  .role-controls {
     grid-template-columns: 1fr;
     flex-direction: column;
   }
 
-  .account-proxy-form .btn {
-    grid-column: span 1;
+  .proxy-modal-form,
+  .modal-actions {
+    grid-template-columns: 1fr;
   }
 }
