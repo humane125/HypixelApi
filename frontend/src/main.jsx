@@ -56,6 +56,21 @@ const defaultAccountForm = {
   notes: '',
 };
 
+function proxyDraftFromAccount(account) {
+  return {
+    proxyEnabled: Boolean(account.proxy_enabled),
+    proxyType: account.proxy_type || 'SOCKS5',
+    proxyHost: account.proxy_host || '',
+    proxyPort: account.proxy_port ? String(account.proxy_port) : '',
+    proxyUsername: account.proxy_username || '',
+    proxyPassword: '',
+  };
+}
+
+function proxyDraftsFromAccounts(accounts) {
+  return Object.fromEntries((accounts || []).map((account) => [account.id, proxyDraftFromAccount(account)]));
+}
+
 const defaultKeyForm = {
   userId: '',
   name: '',
@@ -648,6 +663,7 @@ function DashboardView() {
   const [statusMessage, setStatusMessage] = useState('Log in to access the dashboard');
   const [issuedKey, setIssuedKey] = useState(null);
   const [roleDrafts, setRoleDrafts] = useState({});
+  const [proxyDrafts, setProxyDrafts] = useState({});
   const [nowMs, setNowMs] = useState(Date.now());
   const [activeAccountFolder, setActiveAccountFolder] = useState('all');
 
@@ -665,12 +681,14 @@ function DashboardView() {
         : { users: [] };
       setMe(meBody.user);
       setAccounts(accountsBody.accounts || []);
+      setProxyDrafts(proxyDraftsFromAccounts(accountsBody.accounts || []));
       setApiKeys(keysBody.apiKeys || []);
       setDashboardUsers(usersBody.users || []);
       setStatusMessage('Dashboard loaded');
     } catch (err) {
       setMe(null);
       setAccounts([]);
+      setProxyDrafts({});
       setApiKeys([]);
       setDashboardUsers([]);
       setStatusMessage(err.message);
@@ -692,6 +710,7 @@ function DashboardView() {
         const data = JSON.parse(event.data);
         if (data.type === 'accounts') {
           setAccounts(data.accounts || []);
+          setProxyDrafts(proxyDraftsFromAccounts(data.accounts || []));
         }
       } catch (err) {
         console.error('Dashboard websocket message failed:', err);
@@ -754,6 +773,7 @@ function DashboardView() {
     }
     setMe(null);
     setAccounts([]);
+    setProxyDrafts({});
     setApiKeys([]);
     setDashboardUsers([]);
     setIssuedKey(null);
@@ -770,6 +790,16 @@ function DashboardView() {
 
   const updateUserForm = useCallback((field, value) => {
     setUserForm((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const updateProxyDraft = useCallback((accountId, field, value) => {
+    setProxyDrafts((current) => ({
+      ...current,
+      [accountId]: {
+        ...(current[accountId] || {}),
+        [field]: value,
+      },
+    }));
   }, []);
 
   const toggleScope = useCallback((scope) => {
@@ -879,6 +909,30 @@ function DashboardView() {
       setStatusMessage(err.message);
     }
   }, [loadDashboard]);
+
+  const saveAccountProxy = useCallback(async (event, account) => {
+    event.preventDefault();
+    const draft = proxyDrafts[account.id] || proxyDraftFromAccount(account);
+    const password = String(draft.proxyPassword || '').trim();
+    try {
+      await apiFetch('/api/dashboard/accounts/proxy', null, {
+        method: 'POST',
+        body: JSON.stringify({
+          accountId: account.id,
+          proxyEnabled: draft.proxyEnabled,
+          proxyType: draft.proxyType,
+          proxyHost: draft.proxyHost,
+          proxyPort: draft.proxyPort,
+          proxyUsername: draft.proxyUsername,
+          ...(password ? { proxyPassword: password } : {}),
+        }),
+      });
+      setStatusMessage(`Proxy saved for ${account.minecraft_username}`);
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard, proxyDrafts]);
 
   const deleteDashboardUser = useCallback(async (user) => {
     const confirmed = window.confirm(`Delete dashboard user "${user.username}"?`);
@@ -1139,6 +1193,7 @@ function DashboardView() {
               const folderRemainingMs = displayStatus === 'banned' && account.banned_folder_available_at && !isAccountInBannedFolder(account, nowMs)
                 ? Date.parse(account.banned_folder_available_at) - nowMs
                 : null;
+              const proxyDraft = proxyDrafts[account.id] || proxyDraftFromAccount(account);
               return (
                 <article className="account-card" key={account.id}>
                   <div className="account-card-head">
@@ -1196,10 +1251,59 @@ function DashboardView() {
                       <dt>Notes</dt>
                       <dd>{account.notes || 'None'}</dd>
                     </div>
+                    <div>
+                      <dt>Proxy</dt>
+                      <dd>{account.proxy_enabled ? `${account.proxy_type} ${account.proxy_host}:${account.proxy_port}` : 'Disabled'}</dd>
+                    </div>
                   </dl>
 
                   {canManageUsers || canManageAccounts ? (
                     <div className="account-controls">
+                      {canManageAccounts ? (
+                        <form className="account-proxy-form" onSubmit={(event) => saveAccountProxy(event, account)}>
+                          <label className="proxy-toggle">
+                            <input
+                              type="checkbox"
+                              checked={proxyDraft.proxyEnabled}
+                              onChange={(event) => updateProxyDraft(account.id, 'proxyEnabled', event.target.checked)}
+                            />
+                            <span>Proxy</span>
+                          </label>
+                          <select
+                            value={proxyDraft.proxyType}
+                            onChange={(event) => updateProxyDraft(account.id, 'proxyType', event.target.value)}
+                          >
+                            <option value="SOCKS5">SOCKS5</option>
+                            <option value="SOCKS4">SOCKS4</option>
+                            <option value="HTTP">HTTP</option>
+                          </select>
+                          <input
+                            value={proxyDraft.proxyHost}
+                            onChange={(event) => updateProxyDraft(account.id, 'proxyHost', event.target.value)}
+                            placeholder="Host"
+                          />
+                          <input
+                            type="number"
+                            min="1"
+                            max="65535"
+                            value={proxyDraft.proxyPort}
+                            onChange={(event) => updateProxyDraft(account.id, 'proxyPort', event.target.value)}
+                            placeholder="Port"
+                          />
+                          <input
+                            value={proxyDraft.proxyUsername}
+                            onChange={(event) => updateProxyDraft(account.id, 'proxyUsername', event.target.value)}
+                            placeholder="Username"
+                          />
+                          <input
+                            type="password"
+                            value={proxyDraft.proxyPassword}
+                            onChange={(event) => updateProxyDraft(account.id, 'proxyPassword', event.target.value)}
+                            placeholder={account.proxy_has_password ? 'Password set' : 'Password'}
+                          />
+                          <button className="btn secondary compact" type="submit">Save Proxy</button>
+                        </form>
+                      ) : null}
                       <div className="account-action-row">
                         {canManageUsers ? (
                           <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>

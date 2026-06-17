@@ -669,6 +669,44 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.account-proxy-form {
+  display: grid;
+  grid-template-columns: 86px minmax(92px, 0.7fr) minmax(0, 1fr) 84px;
+  gap: 8px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.account-proxy-form input,
+.account-proxy-form select {
+  min-height: 36px;
+  padding: 8px 9px;
+}
+
+.account-proxy-form .btn {
+  grid-column: span 4;
+}
+
+.proxy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0c0e11;
+  color: var(--muted);
+  padding: 8px 9px;
+  font-weight: 800;
+  font-size: 0.78rem;
+}
+
+.proxy-toggle input {
+  width: auto;
+  min-height: auto;
+}
+
 .account-connect {
   width: 100%;
 }
@@ -829,8 +867,13 @@ tbody tr:hover {
 
   .form-actions,
   .status-controls,
-  .role-controls {
+  .role-controls,
+  .account-proxy-form {
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .account-proxy-form .btn {
+    grid-column: span 1;
   }
 }
