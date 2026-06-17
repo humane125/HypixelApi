@@ -188,7 +188,7 @@ test('minecraft account proxy settings are listed without passwords', () => {
   assert.strictEqual(Object.prototype.hasOwnProperty.call(listed, 'proxy_password'), false);
 });
 
-test('mod proxy lookup is owner scoped and includes the saved password', () => {
+test('mod proxy lookup is minecraft account scoped and includes the saved password', () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
   const other = createUser(db, { username: 'other', role: 'manager' });
@@ -224,10 +224,20 @@ test('mod proxy lookup is owner scoped and includes the saved password', () => {
     password: 'local-pass',
   });
 
-  assert.strictEqual(getMinecraftAccountProxyForOwner(db, {
+  assert.deepStrictEqual(getMinecraftAccountProxyForOwner(db, {
     ownerUserId: other.id,
     minecraftUsername: 'LookupProxyPlayer',
-  }), null);
+  }), {
+    accountId: account.id,
+    minecraftUuid: '00000000-0000-0000-0000-000000000042',
+    minecraftUsername: 'LookupProxyPlayer',
+    enabled: true,
+    type: 'SOCKS5',
+    host: '127.0.0.1',
+    port: 1080,
+    username: 'local-user',
+    password: 'local-pass',
+  });
 });
 
 test('banned accounts are foldered after 8 hours or manual move', () => {

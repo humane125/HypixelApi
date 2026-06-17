@@ -1,7 +1,14 @@
 const assert = require('assert');
 const WebSocket = require('ws');
 
-const { createDatabase, createUser, createApiKey, setUserPassword } = require('../auth-db');
+const {
+  createDatabase,
+  createUser,
+  createApiKey,
+  setUserPassword,
+  createMinecraftAccount,
+  updateMinecraftAccountProxy,
+} = require('../auth-db');
 const { createAppServer, createAuctionIndexService } = require('../server');
 
 function test(name, fn) {
@@ -855,7 +862,7 @@ test('dashboard can save account proxy settings without exposing proxy passwords
   }
 });
 
-test('mod account proxy lookup is authenticated and scoped to the api key owner', async () => {
+test('mod account proxy lookup is authenticated and scoped to the minecraft account', async () => {
   const { db, owner, server } = createTestServer();
   const other = createUser(db, { username: 'other', role: 'manager' });
   setUserPassword(db, other.id, 'other-password');
@@ -922,7 +929,11 @@ test('mod account proxy lookup is authenticated and scoped to the api key owner'
       },
       body: JSON.stringify({ minecraftUsername: 'LookupDashboardProxy' }),
     });
-    assert.strictEqual(otherLookup.status, 404);
+    assert.strictEqual(otherLookup.status, 200);
+    const otherProxy = (await otherLookup.json()).proxy;
+    assert.strictEqual(otherProxy.accountId, accountId);
+    assert.strictEqual(otherProxy.host, '127.0.0.1');
+    assert.strictEqual(otherProxy.password, 'mod-secret');
 
     const lookup = await fetch(`${baseUrl}/api/mod/account-proxy`, {
       method: 'POST',
@@ -947,6 +958,183 @@ test('mod account proxy lookup is authenticated and scoped to the api key owner'
       },
     });
   } finally {
+    await close(server);
+  }
+});
+
+test('existing owner account goes active and hypixel when another user opens it through the mod', async () => {
+  const db = createDatabase(':memory:');
+  const humane = createUser(db, { username: 'Humane', role: 'manager' });
+  setUserPassword(db, humane.id, 'humane-password');
+  const edzioo = createUser(db, { username: 'Edzioo', role: 'manager' });
+  createApiKey(db, {
+    userId: edzioo.id,
+    name: 'edzioo mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_edzioo_status_existing_account',
+  });
+  const account = createMinecraftAccount(db, {
+    label: 'Rivoh89',
+    minecraftUuid: '00000000-0000-0000-0000-000000000089',
+    minecraftUsername: 'Rivoh89',
+    ownerUserId: humane.id,
+  });
+
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000089',
+        name: 'Rivoh89',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_edzioo_status_existing_account',
+      username: 'Rivoh89',
+    }));
+    const authed = await waitForSocketMessage(socket);
+    assert.strictEqual(authed.type, 'auth_ok');
+    assert.strictEqual(authed.account.id, account.id);
+    assert.strictEqual(authed.account.owner_user_id, humane.id);
+
+    socket.send(JSON.stringify({ type: 'active' }));
+    const active = await waitForSocketMessage(socket);
+    assert.strictEqual(active.type, 'status_ok');
+    assert.strictEqual(active.status, 'active');
+
+    const stored = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(account.id);
+    assert.strictEqual(stored.owner_user_id, humane.id);
+    assert.strictEqual(stored.status, 'active');
+
+    const humaneCookie = await loginDashboard(baseUrl, 'Humane', 'humane-password');
+    const listedActive = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: humaneCookie },
+    });
+    assert.strictEqual(listedActive.status, 200);
+    const listedActiveAccount = (await listedActive.json()).accounts.find((row) => row.id === account.id);
+    assert.ok(listedActiveAccount);
+    assert.strictEqual(listedActiveAccount.owner_username, 'Humane');
+    assert.strictEqual(listedActiveAccount.status, 'active');
+
+    socket.send(JSON.stringify({ type: 'hypixel' }));
+    const hypixel = await waitForSocketMessage(socket);
+    assert.strictEqual(hypixel.type, 'status_ok');
+    assert.strictEqual(hypixel.status, 'hypixel');
+
+    const listedHypixel = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: humaneCookie },
+    });
+    assert.strictEqual(listedHypixel.status, 200);
+    const listedHypixelAccount = (await listedHypixel.json()).accounts.find((row) => row.id === account.id);
+    assert.ok(listedHypixelAccount);
+    assert.strictEqual(listedHypixelAccount.owner_username, 'Humane');
+    assert.strictEqual(listedHypixelAccount.status, 'hypixel');
+  } finally {
+    closeSocketSilently(socket);
+    await close(server);
+  }
+});
+
+test('mod websocket does not transfer existing account ownership or lose proxy settings', async () => {
+  const db = createDatabase(':memory:');
+  const humane = createUser(db, { username: 'Humane', role: 'manager' });
+  const edzioo = createUser(db, { username: 'Edzioo', role: 'manager' });
+  createApiKey(db, {
+    userId: edzioo.id,
+    name: 'edzioo mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_edzioo_existing_account',
+  });
+  const account = createMinecraftAccount(db, {
+    label: 'Rivoh89',
+    minecraftUuid: '00000000-0000-0000-0000-000000000089',
+    minecraftUsername: 'Rivoh89',
+    ownerUserId: humane.id,
+  });
+  updateMinecraftAccountProxy(db, account.id, {
+    proxyEnabled: true,
+    proxyType: 'SOCKS5',
+    proxyHost: '127.0.0.89',
+    proxyPort: 1089,
+    proxyUsername: 'rivoh-proxy',
+    proxyPassword: 'rivoh-secret',
+  });
+
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000089',
+        name: 'Rivoh89',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_edzioo_existing_account',
+      username: 'Rivoh89',
+    }));
+    const authed = await waitForSocketMessage(socket);
+    assert.strictEqual(authed.type, 'auth_ok');
+    assert.strictEqual(authed.account.owner_user_id, humane.id);
+
+    const stored = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(account.id);
+    assert.strictEqual(stored.owner_user_id, humane.id);
+    assert.strictEqual(stored.proxy_enabled, 1);
+    assert.strictEqual(stored.proxy_host, '127.0.0.89');
+    assert.strictEqual(stored.proxy_port, 1089);
+
+    const proxyLookup = await fetch(`${baseUrl}/api/mod/account-proxy`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer hpx_test_edzioo_existing_account',
+      },
+      body: JSON.stringify({ minecraftUuid: '00000000000000000000000000000089' }),
+    });
+    assert.strictEqual(proxyLookup.status, 200);
+    const proxyBody = await proxyLookup.json();
+    assert.strictEqual(proxyBody.proxy.accountId, account.id);
+    assert.strictEqual(proxyBody.proxy.host, '127.0.0.89');
+    assert.strictEqual(proxyBody.proxy.password, 'rivoh-secret');
+
+    socket.close();
+    await new Promise((resolve, reject) => {
+      socket.once('close', resolve);
+      socket.once('error', reject);
+      setTimeout(() => reject(new Error('Timed out waiting for socket close')), 1500);
+    });
+
+    db.prepare('DELETE FROM minecraft_accounts WHERE id = ?').run(account.id);
+    const reopenedSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+    try {
+      await waitForSocketOpen(reopenedSocket);
+      reopenedSocket.send(JSON.stringify({
+        type: 'auth',
+        apiKey: 'hpx_test_edzioo_existing_account',
+        username: 'Rivoh89',
+      }));
+      const reopened = await waitForSocketMessage(reopenedSocket);
+      assert.strictEqual(reopened.type, 'auth_ok');
+      assert.strictEqual(reopened.account.owner_user_id, edzioo.id);
+      assert.strictEqual(reopened.account.proxy_enabled, 0);
+    } finally {
+      closeSocketSilently(reopenedSocket);
+    }
+  } finally {
+    closeSocketSilently(socket);
     await close(server);
   }
 });

@@ -623,6 +623,7 @@ function upsertMinecraftAccountFromMod(db, {
   const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE minecraft_uuid = ?').get(cleanUuid);
   if (existing) {
     const preserveBan = isActiveBan(existing, timestamp);
+    const ownerToKeep = existing.owner_user_id || ownerUserId;
     db.prepare(`
       UPDATE minecraft_accounts
       SET label = ?,
@@ -642,7 +643,7 @@ function upsertMinecraftAccountFromMod(db, {
     `).run(
       cleanUsername,
       cleanUsername,
-      ownerUserId,
+      ownerToKeep,
       preserveBan ? 'banned' : 'active',
       preserveBan ? existing.ban_reason : null,
       preserveBan ? existing.banned_at : null,
@@ -803,14 +804,14 @@ function getMinecraftAccountProxyForOwner(db, {
   if (minecraftUuid) {
     account = db.prepare(`
       SELECT * FROM minecraft_accounts
-      WHERE owner_user_id = ? AND minecraft_uuid = ?
-    `).get(ownerUserId, normalizeMinecraftUuid(minecraftUuid));
+      WHERE minecraft_uuid = ?
+    `).get(normalizeMinecraftUuid(minecraftUuid));
   }
   if (!account && minecraftUsername) {
     account = db.prepare(`
       SELECT * FROM minecraft_accounts
-      WHERE owner_user_id = ? AND lower(minecraft_username) = lower(?)
-    `).get(ownerUserId, String(minecraftUsername || '').trim());
+      WHERE lower(minecraft_username) = lower(?)
+    `).get(String(minecraftUsername || '').trim());
   }
   if (!account) return null;
 
