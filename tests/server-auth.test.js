@@ -357,14 +357,14 @@ test('mod websocket accepts hypixel and banned status messages', async () => {
       type: 'banned',
       banReason: 'Cheating through the use of unfair game advantages.',
       banId: '#01346337',
-      banUntil: '2026-06-16T15:00:00.000Z',
+      banUntil: '2026-06-18T15:00:00.000Z',
     }));
     const banned = await waitForSocketMessage(socket);
     assert.strictEqual(banned.type, 'status_ok');
     assert.strictEqual(banned.status, 'banned');
     assert.strictEqual(banned.account.ban_reason, 'Cheating through the use of unfair game advantages.');
     assert.strictEqual(banned.account.ban_id, '#01346337');
-    assert.strictEqual(banned.account.ban_until, '2026-06-16T15:00:00.000Z');
+    assert.strictEqual(banned.account.ban_until, '2026-06-18T15:00:00.000Z');
 
     socket.send(JSON.stringify({ type: 'offline' }));
     const offline = await waitForSocketMessage(socket);
@@ -375,7 +375,7 @@ test('mod websocket accepts hypixel and banned status messages', async () => {
     assert.strictEqual(account.status, 'banned');
     assert.strictEqual(account.ban_reason, 'Cheating through the use of unfair game advantages.');
     assert.strictEqual(account.ban_id, '#01346337');
-    assert.strictEqual(account.ban_until, '2026-06-16T15:00:00.000Z');
+    assert.strictEqual(account.ban_until, '2026-06-18T15:00:00.000Z');
   } finally {
     socket.close();
     await close(server);
