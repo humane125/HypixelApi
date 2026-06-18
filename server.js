@@ -701,6 +701,16 @@ function createModConnectionRegistry() {
       return true;
     }
 
+    if (message.type === 'transfer_sell_offer_ready') {
+      transferSellOfferReady(source, message);
+      return true;
+    }
+
+    if (message.type === 'transfer_sell_offer_bought') {
+      transferSellOfferBought(source, message);
+      return true;
+    }
+
     return false;
   }
 
@@ -849,6 +859,52 @@ function createModConnectionRegistry() {
     const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
     sendSocketJson(session.senderSocket, {
       type: 'transfer_buy_order_ready',
+      quantity,
+      session: publicTransferSession(session),
+    });
+  }
+
+  function transferSellOfferReady(source, message) {
+    const session = sessionForSocket(source.socket);
+    if (!session) {
+      sendTransferError(source.socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    if (session.status !== 'accepted') {
+      sendTransferError(source.socket, 'session_not_accepted', 'Transfer session is not accepted yet');
+      return;
+    }
+    if (session.receiverSocket !== source.socket) {
+      sendTransferError(source.socket, 'receiver_required', 'Only the transfer receiver can mark the sell offer ready');
+      return;
+    }
+
+    const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
+    sendSocketJson(session.senderSocket, {
+      type: 'transfer_sell_offer_ready',
+      quantity,
+      session: publicTransferSession(session),
+    });
+  }
+
+  function transferSellOfferBought(source, message) {
+    const session = sessionForSocket(source.socket);
+    if (!session) {
+      sendTransferError(source.socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    if (session.status !== 'accepted') {
+      sendTransferError(source.socket, 'session_not_accepted', 'Transfer session is not accepted yet');
+      return;
+    }
+    if (session.senderSocket !== source.socket) {
+      sendTransferError(source.socket, 'sender_required', 'Only the transfer sender can mark the sell offer bought');
+      return;
+    }
+
+    const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
+    sendSocketJson(session.receiverSocket, {
+      type: 'transfer_sell_offer_bought',
       quantity,
       session: publicTransferSession(session),
     });
