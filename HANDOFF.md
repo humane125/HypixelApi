@@ -2,34 +2,48 @@
 
 Date: 2026-06-18
 Branch: `master`
+Latest local commit before this handoff: `6b4ad55 Relay transfer purse range`
 
 ## Current Setup
 
-- Local repo: `C:\Humane\Hypixel\Test API`
+- Local repo: `C:\Projects\Hypixel\Test API`
 - GitHub remote: `https://github.com/humane125/HypixelApi.git`
 - RDP deploy path: `C:\Hypixel`
-- Public API URL: `https://lazy-similarly-reaffirm.ngrok-free.dev`
 - RDP SSH target: `Administrator@23.26.77.96`
-- SSH key on this PC: `C:\Users\SoulP\.ssh\hypixel_rdp_ed25519`
+- SSH key on this PC: `C:\Users\moham\.ssh\hypixel_rdp_ed25519`
+- Current public API URL: `https://humane-hypixel.duckdns.org`
+- Old ngrok URL is deprecated: `https://lazy-similarly-reaffirm.ngrok-free.dev`
 
 Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord user IDs, or `node_modules/`.
 
+## What Happened
+
+- The public endpoint was moved from ngrok to DuckDNS + Caddy:
+  - DNS: `humane-hypixel.duckdns.org -> 23.26.77.96`
+  - Caddy reverse proxies `https://humane-hypixel.duckdns.org` to `127.0.0.1:3000`.
+  - Caddy obtained a Let's Encrypt certificate successfully.
+  - Caddy was installed as a Windows service named `caddy` and verified running.
+- `HypixelApi` scheduled task was stopped at one point, causing Caddy `502 Bad Gateway`.
+- `HypixelApi` was started again and verified listening on `0.0.0.0:3000`.
+- Public HTTPS returned `200` with dashboard title `Hypixel SkyBlock Control`.
+- Public websocket handshake to `wss://humane-hypixel.duckdns.org/api/mod/ws` opened successfully.
+- AutoAuction and Alt Manager configs in the 26.1.2 Prism instance were manually updated to the new DuckDNS base URL.
+
 ## Current Behavior
 
-- Dashboard auth uses dashboard username/password only.
-- API keys are assigned to existing dashboard users and are stored hashed.
+- Dashboard auth uses dashboard username/password.
+- API keys are assigned to existing dashboard users and stored hashed.
 - `/api/mod/ws` authenticates mod clients with an API key that has `mod:connect`.
-- Mod websocket auth looks up the Minecraft UUID from Mojang by username.
-- Existing Minecraft accounts keep their current `owner_user_id`; another user's API key cannot steal ownership.
-- Proxy lookup is Minecraft-account scoped. A mod opening an existing account receives that account's configured proxy without changing ownership.
-- Status updates still apply to the existing account row, so an account opened through another user's API key can show `active` or `hypixel` while staying in the original owner's folder.
-- Stale `active` and `hypixel` accounts are displayed as `offline` after the heartbeat window.
-- Active timed bans are preserved through later `active` and `offline` updates until expiry.
-- Dashboard account folders are `All`, per-owner folders, and `Banned`.
+- Mod websocket auth resolves Minecraft UUID from Mojang by username.
+- Existing Minecraft accounts keep current ownership; another user's API key cannot steal ownership.
+- Proxy lookup is Minecraft-account scoped.
+- Status updates apply to the existing account row, so an account can show live status without changing owner folder.
+- Stale `active` and `hypixel` accounts display as `offline` after heartbeat timeout.
+- Active timed bans are preserved through later updates until expiry.
 
 ## Connected Transfer Protocol
 
-Client-to-server websocket messages:
+Client-to-server websocket messages include:
 
 - `transfer_list`
 - `transfer_invite`
@@ -38,102 +52,90 @@ Client-to-server websocket messages:
 - `transfer_cancel`
 - `transfer_run`
 - `transfer_buy_order_ready`
+- `transfer_sell_offer_ready`
+- `transfer_sell_offer_bought`
+- `transfer_cycle_complete`
 
-Server-to-client websocket messages:
+Server relays paired transfer messages only between the accepted sender and receiver session. Cycle completion relays receiver purse `before`, `after`, and `delta` back to the sender so the sender can loop until the target is reached.
 
-- `transfer_accounts`
-- `transfer_invite`
-- `transfer_pending`
-- `transfer_accepted`
-- `transfer_declined`
-- `transfer_cancelled`
-- `transfer_error`
-- `transfer_run`
-- `transfer_run_sent`
-- `transfer_buy_order_ready`
+Transfer sessions are memory-only. The API lists connected mod clients, rejects self-invites, offline targets, and busy accounts, and expires pending invites after 120 seconds.
 
-Transfer sessions are memory-only. The API lists all currently connected mod clients, rejects self-invites, rejects offline targets, rejects busy accounts, expires pending invites after 120 seconds, and relays accepted-session automation messages between the paired sender and receiver.
+## RDP Services
 
-`transfer_buy_order_ready` is the relay used after the receiver has created the buy order. It tells the sender to start the instant-sell step for the accepted session.
+Check Caddy:
 
-## Recent Changes
+```powershell
+sc.exe query caddy
+```
 
-- Added connected transfer pairing over `/api/mod/ws`.
-- Added transfer run relay from sender to receiver.
-- Added receiver buy-order-ready relay from receiver to sender.
-- Added API tests for connected listing, invite, accept, decline, cancel, offline, self-invite, busy-session, run, and buy-order-ready cases.
-- Deployed `server.js` to the RDP at `C:\Hypixel` and restarted the `HypixelApi` scheduled task.
-- Verified the public ngrok URL returned `200 OK` after restart.
+Check API task:
+
+```powershell
+schtasks /Query /TN HypixelApi /V /FO LIST
+netstat -ano | findstr :3000
+```
+
+Start API task if needed:
+
+```powershell
+schtasks /Run /TN HypixelApi
+```
 
 ## Verification
 
-Run locally:
+Local repo:
 
 ```powershell
+cd "C:\Projects\Hypixel\Test API"
 npm test
 npm run build
 ```
 
-Latest local verification on 2026-06-18:
+Public endpoint from PC:
 
-- `npm test` passed.
+```powershell
+Invoke-WebRequest -Uri "https://humane-hypixel.duckdns.org/" -UseBasicParsing
+```
 
-Use `npm run build` before deploying frontend changes.
+WebSocket probe from PC:
+
+```powershell
+$ws = [System.Net.WebSockets.ClientWebSocket]::new()
+$ws.ConnectAsync([Uri]"wss://humane-hypixel.duckdns.org/api/mod/ws", [Threading.CancellationToken]::None).Wait(10000)
+$ws.State
+```
+
+Expected state: `Open`.
 
 ## Deploy To RDP
 
-The RDP already has OpenSSH server enabled. Direct `Start-Process` from SSH can be killed when the SSH session exits, so start Node through the scheduled task below.
-
-From this repo:
+Use explicit OpenSSH path if `ssh` is not in PATH:
 
 ```powershell
-npm install
-npm test
-npm run build
-
-ssh -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" Administrator@23.26.77.96 "powershell -NoProfile -Command `"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force`""
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\server.js" Administrator@23.26.77.96:C:/Hypixel/server.js
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\auth-db.js" Administrator@23.26.77.96:C:/Hypixel/auth-db.js
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\package.json" Administrator@23.26.77.96:C:/Hypixel/package.json
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\package-lock.json" Administrator@23.26.77.96:C:/Hypixel/package-lock.json
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" -r "C:\Humane\Hypixel\Test API\public" Administrator@23.26.77.96:C:/Hypixel/
+$ssh = "$env:WINDIR\System32\OpenSSH\ssh.exe"
+$scp = "$env:WINDIR\System32\OpenSSH\scp.exe"
 ```
 
-Start/restart the RDP Node process:
+Deploy changed server files:
 
 ```powershell
-$remoteStart = @'
-$ErrorActionPreference = 'Continue'
-$cmd = @"
-@echo off
-cd /d C:\Hypixel
-"C:\Program Files\nodejs\node.exe" server.js >> C:\Hypixel\server.out.log 2>> C:\Hypixel\server.err.log
-"@
-Set-Content -Path 'C:\Hypixel\start-server.cmd' -Value $cmd -Encoding ASCII
-schtasks /End /TN HypixelApi 2>$null | Out-Null
-schtasks /Delete /TN HypixelApi /F 2>$null | Out-Null
-Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
-schtasks /Create /TN HypixelApi /SC ONCE /ST 23:59 /TR 'C:\Hypixel\start-server.cmd' /RL HIGHEST /F
-schtasks /Run /TN HypixelApi
-Start-Sleep -Seconds 3
-Get-CimInstance Win32_Process -Filter "name = 'node.exe'" | Select-Object ProcessId,CommandLine,CreationDate
-'@
-$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteStart))
-ssh -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" Administrator@23.26.77.96 "powershell -NoProfile -EncodedCommand $encoded"
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\server.js" Administrator@23.26.77.96:C:/Hypixel/server.js
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\auth-db.js" Administrator@23.26.77.96:C:/Hypixel/auth-db.js
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\package.json" Administrator@23.26.77.96:C:/Hypixel/package.json
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\package-lock.json" Administrator@23.26.77.96:C:/Hypixel/package-lock.json
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" -r "C:\Projects\Hypixel\Test API\public" Administrator@23.26.77.96:C:/Hypixel/
 ```
 
-Verify:
+Restart API:
 
 ```powershell
-ssh -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" Administrator@23.26.77.96 "powershell -NoProfile -Command `"Get-CimInstance Win32_Process -Filter 'name = ''node.exe''' | Select-Object ProcessId,CommandLine,CreationDate`""
-Invoke-WebRequest -UseBasicParsing -Uri "https://lazy-similarly-reaffirm.ngrok-free.dev/" -Headers @{ "ngrok-skip-browser-warning" = "true" }
+& $ssh -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" Administrator@23.26.77.96 "schtasks /Run /TN HypixelApi"
 ```
 
 ## Next Work
 
-1. Continue the transfer loop after the receiver creates the sell offer by adding sender buy-back routing.
-2. Add receiver sell-offer fill detection and sell-offer claim routing.
-3. Add cycle state, stop conditions, and error recovery to the API session model if automation needs server-side coordination.
-4. Add websocket reconnect/backoff support in the mod and keep transfer state coherent after reconnect.
-5. Add dashboard visibility for connected mod clients, transfer session state, and last heartbeat time.
-6. Add a dashboard warning before deleting an account with a live mod socket.
+1. Make `HypixelApi` more robust as a service or scheduled task that auto-starts on boot and restarts after crashes.
+2. Add websocket reconnect/backoff in the mods and resend current status after reconnect.
+3. Add dashboard visibility for connected mod clients, transfer session state, and last heartbeat.
+4. Add better transfer error reporting and optional persistent transfer audit logs.
+5. Keep the public URL standardized as `https://humane-hypixel.duckdns.org` in docs and runtime configs.
