@@ -931,10 +931,14 @@ function createModConnectionRegistry() {
     }
 
     const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
-    const delta = Number.isFinite(Number(message.delta)) ? Math.trunc(Number(message.delta)) : 0;
+    const before = Number.isFinite(Number(message.before)) ? Math.trunc(Number(message.before)) : 0;
+    const after = Number.isFinite(Number(message.after)) ? Math.trunc(Number(message.after)) : before;
+    const delta = Number.isFinite(Number(message.delta)) ? Math.trunc(Number(message.delta)) : after - before;
     sendSocketJson(session.senderSocket, {
       type: 'transfer_cycle_complete',
       quantity,
+      before,
+      after,
       delta,
       session: publicTransferSession(session),
     });

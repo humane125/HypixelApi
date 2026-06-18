@@ -294,10 +294,18 @@ test('mod websocket lists connected transfer accounts and accepts a transfer inv
     assert.strictEqual(receiverSellOfferBought.quantity, 128);
     assert.strictEqual(receiverSellOfferBought.session.itemName, 'ENCHANTED DIAMOND');
 
-    receiver.send(JSON.stringify({ type: 'transfer_cycle_complete', quantity: 128, delta: 17500000 }));
+    receiver.send(JSON.stringify({
+      type: 'transfer_cycle_complete',
+      quantity: 128,
+      before: 1000000,
+      after: 18500000,
+      delta: 17500000,
+    }));
     const senderCycleComplete = await waitForSocketMessage(sender);
     assert.strictEqual(senderCycleComplete.type, 'transfer_cycle_complete');
     assert.strictEqual(senderCycleComplete.quantity, 128);
+    assert.strictEqual(senderCycleComplete.before, 1000000);
+    assert.strictEqual(senderCycleComplete.after, 18500000);
     assert.strictEqual(senderCycleComplete.delta, 17500000);
     assert.strictEqual(senderCycleComplete.session.itemName, 'ENCHANTED DIAMOND');
   } finally {
