@@ -711,6 +711,11 @@ function createModConnectionRegistry() {
       return true;
     }
 
+    if (message.type === 'transfer_cycle_complete') {
+      transferCycleComplete(source, message);
+      return true;
+    }
+
     return false;
   }
 
@@ -906,6 +911,31 @@ function createModConnectionRegistry() {
     sendSocketJson(session.receiverSocket, {
       type: 'transfer_sell_offer_bought',
       quantity,
+      session: publicTransferSession(session),
+    });
+  }
+
+  function transferCycleComplete(source, message) {
+    const session = sessionForSocket(source.socket);
+    if (!session) {
+      sendTransferError(source.socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    if (session.status !== 'accepted') {
+      sendTransferError(source.socket, 'session_not_accepted', 'Transfer session is not accepted yet');
+      return;
+    }
+    if (session.receiverSocket !== source.socket) {
+      sendTransferError(source.socket, 'receiver_required', 'Only the transfer receiver can complete a transfer cycle');
+      return;
+    }
+
+    const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
+    const delta = Number.isFinite(Number(message.delta)) ? Math.trunc(Number(message.delta)) : 0;
+    sendSocketJson(session.senderSocket, {
+      type: 'transfer_cycle_complete',
+      quantity,
+      delta,
       session: publicTransferSession(session),
     });
   }
