@@ -201,6 +201,175 @@ test('mod websocket authenticates api keys with mod connect scope and registers 
   }
 });
 
+test('mod websocket lists connected transfer accounts and accepts a transfer invite', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'sender mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_transfer_sender',
+  });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'receiver mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_transfer_receiver',
+  });
+  const profiles = {
+    SenderPlayer: '00000000000000000000000000001001',
+    ReceiverPlayer: '00000000000000000000000000001002',
+  };
+  const server = createAppServer({
+    db,
+    fetchImpl: async (requestUrl) => {
+      const username = decodeURIComponent(String(requestUrl).split('/').pop());
+      return {
+        ok: true,
+        json: async () => ({ id: profiles[username], name: username }),
+      };
+    },
+  });
+  const baseUrl = await listen(server);
+  const sender = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  const receiver = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await Promise.all([waitForSocketOpen(sender), waitForSocketOpen(receiver)]);
+    sender.send(JSON.stringify({ type: 'auth', apiKey: 'hpx_test_transfer_sender', username: 'SenderPlayer' }));
+    receiver.send(JSON.stringify({ type: 'auth', apiKey: 'hpx_test_transfer_receiver', username: 'ReceiverPlayer' }));
+    assert.strictEqual((await waitForSocketMessage(sender)).type, 'auth_ok');
+    assert.strictEqual((await waitForSocketMessage(receiver)).type, 'auth_ok');
+
+    sender.send(JSON.stringify({ type: 'transfer_list' }));
+    const listed = await waitForSocketMessage(sender);
+    assert.strictEqual(listed.type, 'transfer_accounts');
+    assert.deepStrictEqual(listed.accounts.map((account) => account.minecraftUsername).sort(), ['ReceiverPlayer', 'SenderPlayer']);
+
+    sender.send(JSON.stringify({
+      type: 'transfer_invite',
+      receiverUsername: 'ReceiverPlayer',
+      itemName: 'ENCHANTED DIAMOND',
+    }));
+    const pending = await waitForSocketMessage(sender);
+    const invite = await waitForSocketMessage(receiver);
+    assert.strictEqual(pending.type, 'transfer_pending');
+    assert.strictEqual(invite.type, 'transfer_invite');
+    assert.strictEqual(invite.session.senderUsername, 'SenderPlayer');
+    assert.strictEqual(invite.session.receiverUsername, 'ReceiverPlayer');
+    assert.strictEqual(invite.session.itemName, 'ENCHANTED DIAMOND');
+
+    receiver.send(JSON.stringify({ type: 'transfer_accept', senderUsername: 'SenderPlayer' }));
+    const senderAccepted = await waitForSocketMessage(sender);
+    const receiverAccepted = await waitForSocketMessage(receiver);
+    assert.strictEqual(senderAccepted.type, 'transfer_accepted');
+    assert.strictEqual(senderAccepted.role, 'sender');
+    assert.strictEqual(receiverAccepted.type, 'transfer_accepted');
+    assert.strictEqual(receiverAccepted.role, 'receiver');
+    assert.strictEqual(senderAccepted.session.id, receiverAccepted.session.id);
+
+    sender.send(JSON.stringify({ type: 'transfer_run', quantity: 128 }));
+    const senderRun = await waitForSocketMessage(sender);
+    const receiverRun = await waitForSocketMessage(receiver);
+    assert.strictEqual(senderRun.type, 'transfer_run_sent');
+    assert.strictEqual(senderRun.quantity, 128);
+    assert.strictEqual(receiverRun.type, 'transfer_run');
+    assert.strictEqual(receiverRun.quantity, 128);
+    assert.strictEqual(receiverRun.session.itemName, 'ENCHANTED DIAMOND');
+
+    receiver.send(JSON.stringify({ type: 'transfer_buy_order_ready', quantity: 128 }));
+    const senderReady = await waitForSocketMessage(sender);
+    assert.strictEqual(senderReady.type, 'transfer_buy_order_ready');
+    assert.strictEqual(senderReady.quantity, 128);
+    assert.strictEqual(senderReady.session.itemName, 'ENCHANTED DIAMOND');
+  } finally {
+    closeSocketSilently(sender);
+    closeSocketSilently(receiver);
+    await close(server);
+  }
+});
+
+test('mod websocket handles transfer decline cancel and invalid invite cases', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  for (const [rawKey, name] of [
+    ['hpx_test_transfer_sender_errors', 'SenderPlayer'],
+    ['hpx_test_transfer_receiver_errors', 'ReceiverPlayer'],
+    ['hpx_test_transfer_third_errors', 'ThirdPlayer'],
+  ]) {
+    createApiKey(db, {
+      userId: owner.id,
+      name,
+      scopes: ['mod:connect'],
+      rawKey,
+    });
+  }
+  const profiles = {
+    SenderPlayer: '00000000000000000000000000002001',
+    ReceiverPlayer: '00000000000000000000000000002002',
+    ThirdPlayer: '00000000000000000000000000002003',
+  };
+  const server = createAppServer({
+    db,
+    fetchImpl: async (requestUrl) => {
+      const username = decodeURIComponent(String(requestUrl).split('/').pop());
+      return {
+        ok: true,
+        json: async () => ({ id: profiles[username], name: username }),
+      };
+    },
+  });
+  const baseUrl = await listen(server);
+  const sender = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  const receiver = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  const third = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await Promise.all([waitForSocketOpen(sender), waitForSocketOpen(receiver), waitForSocketOpen(third)]);
+    sender.send(JSON.stringify({ type: 'auth', apiKey: 'hpx_test_transfer_sender_errors', username: 'SenderPlayer' }));
+    receiver.send(JSON.stringify({ type: 'auth', apiKey: 'hpx_test_transfer_receiver_errors', username: 'ReceiverPlayer' }));
+    third.send(JSON.stringify({ type: 'auth', apiKey: 'hpx_test_transfer_third_errors', username: 'ThirdPlayer' }));
+    assert.strictEqual((await waitForSocketMessage(sender)).type, 'auth_ok');
+    assert.strictEqual((await waitForSocketMessage(receiver)).type, 'auth_ok');
+    assert.strictEqual((await waitForSocketMessage(third)).type, 'auth_ok');
+
+    sender.send(JSON.stringify({ type: 'transfer_invite', receiverUsername: 'SenderPlayer', itemName: 'ENCHANTED DIAMOND' }));
+    const selfInvite = await waitForSocketMessage(sender);
+    assert.strictEqual(selfInvite.type, 'transfer_error');
+    assert.strictEqual(selfInvite.code, 'self_invite');
+
+    sender.send(JSON.stringify({ type: 'transfer_invite', receiverUsername: 'OfflinePlayer', itemName: 'ENCHANTED DIAMOND' }));
+    const offline = await waitForSocketMessage(sender);
+    assert.strictEqual(offline.type, 'transfer_error');
+    assert.strictEqual(offline.code, 'target_offline');
+
+    sender.send(JSON.stringify({ type: 'transfer_invite', receiverUsername: 'ReceiverPlayer', itemName: 'ENCHANTED DIAMOND' }));
+    assert.strictEqual((await waitForSocketMessage(sender)).type, 'transfer_pending');
+    assert.strictEqual((await waitForSocketMessage(receiver)).type, 'transfer_invite');
+
+    third.send(JSON.stringify({ type: 'transfer_invite', receiverUsername: 'ReceiverPlayer', itemName: 'ENCHANTED DIAMOND' }));
+    const busy = await waitForSocketMessage(third);
+    assert.strictEqual(busy.type, 'transfer_error');
+    assert.strictEqual(busy.code, 'account_busy');
+
+    receiver.send(JSON.stringify({ type: 'transfer_decline', senderUsername: 'SenderPlayer' }));
+    const declined = await waitForSocketMessage(sender);
+    assert.strictEqual(declined.type, 'transfer_declined');
+    assert.strictEqual(declined.reason, 'ReceiverPlayer declined');
+
+    sender.send(JSON.stringify({ type: 'transfer_invite', receiverUsername: 'ReceiverPlayer', itemName: 'ENCHANTED DIAMOND' }));
+    assert.strictEqual((await waitForSocketMessage(sender)).type, 'transfer_pending');
+    assert.strictEqual((await waitForSocketMessage(receiver)).type, 'transfer_invite');
+    sender.send(JSON.stringify({ type: 'transfer_cancel' }));
+    const cancelled = await waitForSocketMessage(receiver);
+    assert.strictEqual(cancelled.type, 'transfer_cancelled');
+    assert.strictEqual(cancelled.reason, 'SenderPlayer cancelled');
+  } finally {
+    closeSocketSilently(sender);
+    closeSocketSilently(receiver);
+    closeSocketSilently(third);
+    await close(server);
+  }
+});
+
 test('mod websocket rejects api keys without mod connect scope', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
@@ -1021,6 +1190,7 @@ test('existing owner account goes active and hypixel when another user opens it 
     const listedActiveAccount = (await listedActive.json()).accounts.find((row) => row.id === account.id);
     assert.ok(listedActiveAccount);
     assert.strictEqual(listedActiveAccount.owner_username, 'Humane');
+    assert.strictEqual(listedActiveAccount.current_username, 'Edzioo');
     assert.strictEqual(listedActiveAccount.status, 'active');
 
     socket.send(JSON.stringify({ type: 'hypixel' }));
@@ -1035,7 +1205,22 @@ test('existing owner account goes active and hypixel when another user opens it 
     const listedHypixelAccount = (await listedHypixel.json()).accounts.find((row) => row.id === account.id);
     assert.ok(listedHypixelAccount);
     assert.strictEqual(listedHypixelAccount.owner_username, 'Humane');
+    assert.strictEqual(listedHypixelAccount.current_username, 'Edzioo');
     assert.strictEqual(listedHypixelAccount.status, 'hypixel');
+
+    socket.send(JSON.stringify({ type: 'offline' }));
+    const offline = await waitForSocketMessage(socket);
+    assert.strictEqual(offline.type, 'status_ok');
+    assert.strictEqual(offline.status, 'offline');
+
+    const listedOffline = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: humaneCookie },
+    });
+    assert.strictEqual(listedOffline.status, 200);
+    const listedOfflineAccount = (await listedOffline.json()).accounts.find((row) => row.id === account.id);
+    assert.ok(listedOfflineAccount);
+    assert.strictEqual(listedOfflineAccount.status, 'offline');
+    assert.strictEqual(listedOfflineAccount.current_username, null);
   } finally {
     closeSocketSilently(socket);
     await close(server);

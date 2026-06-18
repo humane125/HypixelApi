@@ -1295,7 +1295,14 @@ function DashboardView() {
                     </div>
                     <div>
                       <dt>Status</dt>
-                      <dd><span className={`status-badge ${displayStatus}`}>{displayStatus}</span></dd>
+                      <dd>
+                        <span className={`status-badge live-status-badge ${displayStatus}`}>
+                          <span className="status-word">{displayStatus}</span>
+                          {(displayStatus === 'active' || displayStatus === 'hypixel') && account.current_username ? (
+                            <span className="status-user">({account.current_username})</span>
+                          ) : null}
+                        </span>
+                      </dd>
                     </div>
                     {displayStatus === 'banned' && banRemainingMs != null ? (
                       <div>

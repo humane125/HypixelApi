@@ -88,6 +88,7 @@ function migrateDatabase(db) {
       minecraft_uuid TEXT NOT NULL UNIQUE,
       minecraft_username TEXT NOT NULL,
       owner_user_id INTEGER,
+      current_user_id INTEGER,
       status TEXT NOT NULL DEFAULT 'active',
       notes TEXT NOT NULL DEFAULT '',
       ban_reason TEXT,
@@ -103,6 +104,7 @@ function migrateDatabase(db) {
       proxy_password TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      FOREIGN KEY (current_user_id) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
@@ -175,6 +177,9 @@ function migrateDatabase(db) {
   }
   if (!accountColumns.includes('proxy_password')) {
     db.exec('ALTER TABLE minecraft_accounts ADD COLUMN proxy_password TEXT');
+  }
+  if (!accountColumns.includes('current_user_id')) {
+    db.exec('ALTER TABLE minecraft_accounts ADD COLUMN current_user_id INTEGER');
   }
 }
 
@@ -489,7 +494,10 @@ function applyComputedAccountStatus(account, { now = Date.now(), heartbeatWindow
     && account.last_seen_at
     && now - Date.parse(account.last_seen_at) > heartbeatWindowMs
   ) {
-    return { ...foldered, status: 'offline' };
+    return { ...foldered, status: 'offline', current_user_id: null, current_username: null };
+  }
+  if (foldered.status === 'offline') {
+    return { ...foldered, current_user_id: null, current_username: null };
   }
   return foldered;
 }
@@ -589,9 +597,11 @@ function listMinecraftAccounts(db, options = {}) {
   return db.prepare(`
     SELECT
       minecraft_accounts.*,
-      users.username AS owner_username
+      users.username AS owner_username,
+      current_users.username AS current_username
     FROM minecraft_accounts
     LEFT JOIN users ON users.id = minecraft_accounts.owner_user_id
+    LEFT JOIN users AS current_users ON current_users.id = minecraft_accounts.current_user_id
     ORDER BY minecraft_accounts.created_at DESC
   `).all().map((account) => publicMinecraftAccount(applyComputedAccountStatus(account, options)));
 }
@@ -629,6 +639,7 @@ function upsertMinecraftAccountFromMod(db, {
       SET label = ?,
           minecraft_username = ?,
           owner_user_id = ?,
+          current_user_id = ?,
           status = ?,
           ban_reason = ?,
           banned_at = ?,
@@ -644,6 +655,7 @@ function upsertMinecraftAccountFromMod(db, {
       cleanUsername,
       cleanUsername,
       ownerToKeep,
+      preserveBan ? null : ownerUserId,
       preserveBan ? 'banned' : 'active',
       preserveBan ? existing.ban_reason : null,
       preserveBan ? existing.banned_at : null,
@@ -665,6 +677,7 @@ function upsertMinecraftAccountFromMod(db, {
       minecraft_uuid,
       minecraft_username,
       owner_user_id,
+      current_user_id,
       status,
       notes,
       last_connected_at,
@@ -673,13 +686,13 @@ function upsertMinecraftAccountFromMod(db, {
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, 'active', '', ?, ?, ?, ?, ?)
-  `).run(cleanUsername, cleanUuid, cleanUsername, ownerUserId, timestamp, timestamp, clientVersion, timestamp, timestamp);
+    VALUES (?, ?, ?, ?, ?, 'active', '', ?, ?, ?, ?, ?)
+  `).run(cleanUsername, cleanUuid, cleanUsername, ownerUserId, ownerUserId, timestamp, timestamp, clientVersion, timestamp, timestamp);
 
   return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(result.lastInsertRowid));
 }
 
-function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
+function recordMinecraftAccountHeartbeat(db, accountId, { now = null, currentUserId = null } = {}) {
   const timestamp = now || nowIso();
   const existing = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId);
   const preserveBan = isActiveBan(existing, timestamp);
@@ -688,6 +701,7 @@ function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
     UPDATE minecraft_accounts
     SET last_seen_at = ?,
         status = ?,
+        current_user_id = ?,
         ban_reason = ?,
         banned_at = ?,
         ban_until = ?,
@@ -698,6 +712,7 @@ function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
   `).run(
     timestamp,
     nextStatus,
+    preserveBan ? null : (currentUserId || existing.current_user_id || null),
     preserveBan ? existing.ban_reason : null,
     preserveBan ? existing.banned_at : null,
     preserveBan ? existing.ban_until : null,
@@ -710,7 +725,7 @@ function recordMinecraftAccountHeartbeat(db, accountId, { now = null } = {}) {
   return publicMinecraftAccount(db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(accountId));
 }
 
-function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {}, { now = null } = {}) {
+function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {}, { now = null, currentUserId = null } = {}) {
   const cleanStatus = String(status || '').trim().toLowerCase();
   if (!['active', 'hypixel', 'offline', 'banned'].includes(cleanStatus)) throw new Error('Invalid connection status');
 
@@ -737,11 +752,15 @@ function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {},
     banUntil = existing.ban_until;
     banId = existing.ban_id;
   }
+  const nextCurrentUserId = ['active', 'hypixel'].includes(nextStatus)
+    ? (currentUserId || existing.current_user_id || null)
+    : null;
 
   db.prepare(`
     UPDATE minecraft_accounts
     SET last_seen_at = ?,
         status = ?,
+        current_user_id = ?,
         ban_reason = ?,
         banned_at = ?,
         ban_until = ?,
@@ -752,6 +771,7 @@ function recordMinecraftAccountConnectionStatus(db, accountId, status, ban = {},
   `).run(
     timestamp,
     nextStatus,
+    nextCurrentUserId,
     banReason,
     bannedAt,
     banUntil,
@@ -861,9 +881,11 @@ function markMinecraftAccountBannedFoldered(db, accountId, { now = null } = {}) 
   const account = db.prepare(`
     SELECT
       minecraft_accounts.*,
-      users.username AS owner_username
+      users.username AS owner_username,
+      current_users.username AS current_username
     FROM minecraft_accounts
     LEFT JOIN users ON users.id = minecraft_accounts.owner_user_id
+    LEFT JOIN users AS current_users ON current_users.id = minecraft_accounts.current_user_id
     WHERE minecraft_accounts.id = ?
   `).get(accountId);
   return account ? publicMinecraftAccount(applyComputedAccountStatus(account, { now: Date.parse(timestamp) })) : null;

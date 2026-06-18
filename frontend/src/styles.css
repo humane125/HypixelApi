@@ -556,6 +556,19 @@ tbody tr:hover {
   font-size: 0.72rem;
 }
 
+.live-status-badge {
+  gap: 6px;
+  text-transform: none;
+}
+
+.live-status-badge .status-word {
+  text-transform: uppercase;
+}
+
+.live-status-badge .status-user {
+  text-transform: none;
+}
+
 .account-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

@@ -1,17 +1,16 @@
 # Test API Handoff
 
-Date: 2026-06-17
+Date: 2026-06-18
 Branch: `master`
-Latest commit at handoff creation: `6301933`
 
 ## Current Setup
 
-- Local repo: `C:\Projects\Hypixel\Test API`
+- Local repo: `C:\Humane\Hypixel\Test API`
 - GitHub remote: `https://github.com/humane125/HypixelApi.git`
 - RDP deploy path: `C:\Hypixel`
 - Public API URL: `https://lazy-similarly-reaffirm.ngrok-free.dev`
 - RDP SSH target: `Administrator@23.26.77.96`
-- SSH key on this PC: `C:\Users\moham\.ssh\hypixel_rdp_ed25519`
+- SSH key on this PC: `C:\Users\SoulP\.ssh\hypixel_rdp_ed25519`
 
 Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord user IDs, or `node_modules/`.
 
@@ -22,23 +21,49 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
 - `/api/mod/ws` authenticates mod clients with an API key that has `mod:connect`.
 - Mod websocket auth looks up the Minecraft UUID from Mojang by username.
 - Existing Minecraft accounts keep their current `owner_user_id`; another user's API key cannot steal ownership.
-- If a Minecraft account row is deleted, the next user who opens that account through the mod creates a fresh row and becomes owner.
 - Proxy lookup is Minecraft-account scoped. A mod opening an existing account receives that account's configured proxy without changing ownership.
-- Status updates still apply to the existing account row, so a Humane-owned account opened by Edzioo can show `active` or `hypixel` while staying in Humane's folder.
+- Status updates still apply to the existing account row, so an account opened through another user's API key can show `active` or `hypixel` while staying in the original owner's folder.
 - Stale `active` and `hypixel` accounts are displayed as `offline` after the heartbeat window.
 - Active timed bans are preserved through later `active` and `offline` updates until expiry.
 - Dashboard account folders are `All`, per-owner folders, and `Banned`.
 
+## Connected Transfer Protocol
+
+Client-to-server websocket messages:
+
+- `transfer_list`
+- `transfer_invite`
+- `transfer_accept`
+- `transfer_decline`
+- `transfer_cancel`
+- `transfer_run`
+- `transfer_buy_order_ready`
+
+Server-to-client websocket messages:
+
+- `transfer_accounts`
+- `transfer_invite`
+- `transfer_pending`
+- `transfer_accepted`
+- `transfer_declined`
+- `transfer_cancelled`
+- `transfer_error`
+- `transfer_run`
+- `transfer_run_sent`
+- `transfer_buy_order_ready`
+
+Transfer sessions are memory-only. The API lists all currently connected mod clients, rejects self-invites, rejects offline targets, rejects busy accounts, expires pending invites after 120 seconds, and relays accepted-session automation messages between the paired sender and receiver.
+
+`transfer_buy_order_ready` is the relay used after the receiver has created the buy order. It tells the sender to start the instant-sell step for the accepted session.
+
 ## Recent Changes
 
-- Fixed ownership stealing in `auth-db.js`.
-- Changed proxy lookup from API-key-owner scoped to Minecraft-account scoped.
-- Added regression tests for:
-  - ownership not transferring when another user opens an existing account
-  - proxy settings staying attached to that account
-  - `active` and `hypixel` statuses showing on the existing owner account
-- Removed stale `handoff2.md`; this file is now the canonical handoff.
-- Deployed the runtime `auth-db.js` fix to the RDP at `C:\Hypixel`.
+- Added connected transfer pairing over `/api/mod/ws`.
+- Added transfer run relay from sender to receiver.
+- Added receiver buy-order-ready relay from receiver to sender.
+- Added API tests for connected listing, invite, accept, decline, cancel, offline, self-invite, busy-session, run, and buy-order-ready cases.
+- Deployed `server.js` to the RDP at `C:\Hypixel` and restarted the `HypixelApi` scheduled task.
+- Verified the public ngrok URL returned `200 OK` after restart.
 
 ## Verification
 
@@ -49,7 +74,7 @@ npm test
 npm run build
 ```
 
-Last local verification before this handoff:
+Latest local verification on 2026-06-18:
 
 - `npm test` passed.
 
@@ -67,11 +92,11 @@ npm test
 npm run build
 
 ssh -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" Administrator@23.26.77.96 "powershell -NoProfile -Command `"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force`""
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\server.js" Administrator@23.26.77.96:C:/Hypixel/server.js
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\auth-db.js" Administrator@23.26.77.96:C:/Hypixel/auth-db.js
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\package.json" Administrator@23.26.77.96:C:/Hypixel/package.json
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\package-lock.json" Administrator@23.26.77.96:C:/Hypixel/package-lock.json
-scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" -r "C:\Projects\Hypixel\Test API\public" Administrator@23.26.77.96:C:/Hypixel/
+scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\server.js" Administrator@23.26.77.96:C:/Hypixel/server.js
+scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\auth-db.js" Administrator@23.26.77.96:C:/Hypixel/auth-db.js
+scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\package.json" Administrator@23.26.77.96:C:/Hypixel/package.json
+scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\package-lock.json" Administrator@23.26.77.96:C:/Hypixel/package-lock.json
+scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" -r "C:\Humane\Hypixel\Test API\public" Administrator@23.26.77.96:C:/Hypixel/
 ```
 
 Start/restart the RDP Node process:
@@ -106,7 +131,9 @@ Invoke-WebRequest -UseBasicParsing -Uri "https://lazy-similarly-reaffirm.ngrok-f
 
 ## Next Work
 
-1. Add AutoAuction websocket reconnect/backoff after API or ngrok restarts.
-2. Add dashboard visibility for connected mod clients and last heartbeat time.
-3. Add a dashboard warning before deleting an account with a live mod socket.
-4. Consider making banned-folder delay configurable.
+1. Continue the transfer loop after the receiver creates the sell offer by adding sender buy-back routing.
+2. Add receiver sell-offer fill detection and sell-offer claim routing.
+3. Add cycle state, stop conditions, and error recovery to the API session model if automation needs server-side coordination.
+4. Add websocket reconnect/backoff support in the mod and keep transfer state coherent after reconnect.
+5. Add dashboard visibility for connected mod clients, transfer session state, and last heartbeat time.
+6. Add a dashboard warning before deleting an account with a live mod socket.

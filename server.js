@@ -617,17 +617,329 @@ function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
 
 function createModConnectionRegistry() {
   const clients = new Set();
+  const transferSessions = new Map();
+  const TRANSFER_INVITE_TTL_MS = 120_000;
 
   function register(socket, auth, account) {
     let client = [...clients].find((entry) => entry.socket === socket);
     if (!client) {
       client = { socket, auth, account };
       clients.add(client);
-      socket.on('close', () => clients.delete(client));
-      socket.on('error', () => clients.delete(client));
+      socket.on('close', () => remove(socket, 'Socket disconnected'));
+      socket.on('error', () => remove(socket, 'Socket disconnected'));
     }
     client.auth = auth;
     client.account = account;
+  }
+
+  function remove(socket, reason = 'Socket disconnected') {
+    for (const client of [...clients]) {
+      if (client.socket === socket) {
+        clients.delete(client);
+      }
+    }
+    cancelSessionForSocket(socket, reason, { notifySource: false });
+  }
+
+  function connectedAccounts() {
+    pruneClosedClients();
+    return [...clients]
+      .filter((client) => client.account && client.account.id)
+      .map((client) => ({
+        accountId: client.account.id,
+        minecraftUuid: client.account.minecraft_uuid,
+        minecraftUsername: client.account.minecraft_username,
+        status: client.account.status || 'active',
+      }));
+  }
+
+  function handleTransferMessage(socket, message) {
+    pruneClosedClients();
+    expireTransferSessions();
+    const source = clientForSocket(socket);
+    if (!source || !source.account) {
+      sendTransferError(socket, 'account_unavailable', 'Authenticated Minecraft account is unavailable; reconnect the mod.');
+      return true;
+    }
+
+    if (message.type === 'transfer_list') {
+      sendSocketJson(socket, {
+        type: 'transfer_accounts',
+        accounts: connectedAccounts(),
+        sentAt: new Date().toISOString(),
+      });
+      return true;
+    }
+
+    if (message.type === 'transfer_invite') {
+      createTransferInvite(source, message);
+      return true;
+    }
+
+    if (message.type === 'transfer_accept') {
+      acceptTransferInvite(source, message);
+      return true;
+    }
+
+    if (message.type === 'transfer_decline') {
+      declineTransferInvite(source, message);
+      return true;
+    }
+
+    if (message.type === 'transfer_cancel') {
+      cancelSessionForSocket(socket, `${source.account.minecraft_username} cancelled`, { notifySource: true });
+      return true;
+    }
+
+    if (message.type === 'transfer_run') {
+      runTransfer(source, message);
+      return true;
+    }
+
+    if (message.type === 'transfer_buy_order_ready') {
+      transferBuyOrderReady(source, message);
+      return true;
+    }
+
+    return false;
+  }
+
+  function createTransferInvite(source, message) {
+    const itemName = cleanText(message.itemName);
+    const receiverUsername = cleanText(message.receiverUsername);
+    if (!receiverUsername || !itemName) {
+      sendTransferError(source.socket, 'invalid_transfer', 'receiverUsername and itemName are required');
+      return;
+    }
+
+    const senderUsername = source.account.minecraft_username;
+    if (sameUsername(senderUsername, receiverUsername)) {
+      sendTransferError(source.socket, 'self_invite', 'Cannot transfer to the same account');
+      return;
+    }
+
+    const receiver = clientByUsername(receiverUsername);
+    if (!receiver) {
+      sendTransferError(source.socket, 'target_offline', `${receiverUsername} is not connected`);
+      return;
+    }
+
+    if (sessionForSocket(source.socket) || sessionForSocket(receiver.socket)) {
+      sendTransferError(source.socket, 'account_busy', 'One of the accounts is already in a transfer session');
+      return;
+    }
+
+    const session = {
+      id: crypto.randomUUID(),
+      senderSocket: source.socket,
+      receiverSocket: receiver.socket,
+      senderAccountId: source.account.id,
+      receiverAccountId: receiver.account.id,
+      senderUsername,
+      receiverUsername: receiver.account.minecraft_username,
+      itemName,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + TRANSFER_INVITE_TTL_MS).toISOString(),
+      timer: null,
+    };
+    session.timer = setTimeout(() => {
+      if (!transferSessions.has(session.id)) return;
+      finishSession(session, {
+        type: 'transfer_cancelled',
+        sessionId: session.id,
+        reason: 'Transfer invite expired',
+      });
+    }, TRANSFER_INVITE_TTL_MS);
+    if (typeof session.timer.unref === 'function') session.timer.unref();
+    transferSessions.set(session.id, session);
+
+    sendSocketJson(source.socket, { type: 'transfer_pending', session: publicTransferSession(session) });
+    sendSocketJson(receiver.socket, { type: 'transfer_invite', session: publicTransferSession(session) });
+  }
+
+  function acceptTransferInvite(receiver, message) {
+    const senderUsername = cleanText(message.senderUsername);
+    const session = [...transferSessions.values()].find((candidate) => (
+      candidate.status === 'pending'
+      && candidate.receiverSocket === receiver.socket
+      && sameUsername(candidate.senderUsername, senderUsername)
+    ));
+    if (!session) {
+      sendTransferError(receiver.socket, 'invite_not_found', `No pending transfer invite from ${senderUsername || 'that account'}`);
+      return;
+    }
+    clearTransferTimer(session);
+    session.status = 'accepted';
+    sendSocketJson(session.senderSocket, {
+      type: 'transfer_accepted',
+      role: 'sender',
+      session: publicTransferSession(session),
+    });
+    sendSocketJson(session.receiverSocket, {
+      type: 'transfer_accepted',
+      role: 'receiver',
+      session: publicTransferSession(session),
+    });
+  }
+
+  function declineTransferInvite(receiver, message) {
+    const senderUsername = cleanText(message.senderUsername);
+    const session = [...transferSessions.values()].find((candidate) => (
+      candidate.status === 'pending'
+      && candidate.receiverSocket === receiver.socket
+      && sameUsername(candidate.senderUsername, senderUsername)
+    ));
+    if (!session) {
+      sendTransferError(receiver.socket, 'invite_not_found', `No pending transfer invite from ${senderUsername || 'that account'}`);
+      return;
+    }
+    finishSession(session, {
+      type: 'transfer_declined',
+      reason: `${session.receiverUsername} declined`,
+      session: publicTransferSession(session),
+    });
+  }
+
+  function runTransfer(source, message) {
+    const session = sessionForSocket(source.socket);
+    if (!session) {
+      sendTransferError(source.socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    if (session.status !== 'accepted') {
+      sendTransferError(source.socket, 'session_not_accepted', 'Transfer session is not accepted yet');
+      return;
+    }
+    if (session.senderSocket !== source.socket) {
+      sendTransferError(source.socket, 'sender_required', 'Only the transfer sender can start a transfer run');
+      return;
+    }
+
+    const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
+    const payload = {
+      quantity,
+      session: publicTransferSession(session),
+    };
+    sendSocketJson(session.senderSocket, {
+      type: 'transfer_run_sent',
+      ...payload,
+    });
+    sendSocketJson(session.receiverSocket, {
+      type: 'transfer_run',
+      ...payload,
+    });
+  }
+
+  function transferBuyOrderReady(source, message) {
+    const session = sessionForSocket(source.socket);
+    if (!session) {
+      sendTransferError(source.socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    if (session.status !== 'accepted') {
+      sendTransferError(source.socket, 'session_not_accepted', 'Transfer session is not accepted yet');
+      return;
+    }
+    if (session.receiverSocket !== source.socket) {
+      sendTransferError(source.socket, 'receiver_required', 'Only the transfer receiver can mark the buy order ready');
+      return;
+    }
+
+    const quantity = Math.max(1, Number.parseInt(message.quantity, 10) || 1);
+    sendSocketJson(session.senderSocket, {
+      type: 'transfer_buy_order_ready',
+      quantity,
+      session: publicTransferSession(session),
+    });
+  }
+
+  function cancelSessionForSocket(socket, reason, { notifySource = true } = {}) {
+    const session = sessionForSocket(socket);
+    if (!session) {
+      if (notifySource) sendTransferError(socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    finishSession(session, {
+      type: 'transfer_cancelled',
+      sessionId: session.id,
+      reason,
+    }, { excludeSocket: notifySource ? null : socket });
+  }
+
+  function finishSession(session, message, { excludeSocket = null } = {}) {
+    clearTransferTimer(session);
+    transferSessions.delete(session.id);
+    for (const socket of [session.senderSocket, session.receiverSocket]) {
+      if (socket !== excludeSocket) {
+        sendSocketJson(socket, message);
+      }
+    }
+  }
+
+  function expireTransferSessions() {
+    const now = Date.now();
+    for (const session of [...transferSessions.values()]) {
+      if (session.status === 'pending' && Date.parse(session.expiresAt) <= now) {
+        finishSession(session, {
+          type: 'transfer_cancelled',
+          sessionId: session.id,
+          reason: 'Transfer invite expired',
+        });
+      }
+    }
+  }
+
+  function pruneClosedClients() {
+    for (const client of [...clients]) {
+      if (client.socket.readyState === WEBSOCKET_CLOSING || client.socket.readyState === WEBSOCKET_CLOSED) {
+        remove(client.socket, 'Socket disconnected');
+      }
+    }
+  }
+
+  function clearTransferTimer(session) {
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+  }
+
+  function sessionForSocket(socket) {
+    return [...transferSessions.values()].find((session) => (
+      session.senderSocket === socket || session.receiverSocket === socket
+    ));
+  }
+
+  function clientForSocket(socket) {
+    return [...clients].find((client) => client.socket === socket) || null;
+  }
+
+  function clientByUsername(username) {
+    return [...clients].find((client) => (
+      client.account && sameUsername(client.account.minecraft_username, username)
+    )) || null;
+  }
+
+  function publicTransferSession(session) {
+    return {
+      id: session.id,
+      senderUsername: session.senderUsername,
+      receiverUsername: session.receiverUsername,
+      itemName: session.itemName,
+      status: session.status,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+    };
+  }
+
+  function sendTransferError(socket, code, message) {
+    sendSocketJson(socket, {
+      type: 'transfer_error',
+      code,
+      message,
+      sentAt: new Date().toISOString(),
+    });
   }
 
   function broadcastDisconnect({ sourceSocket, sourceAccount }) {
@@ -654,7 +966,15 @@ function createModConnectionRegistry() {
     }
   }
 
-  return { register, broadcastDisconnect };
+  function cleanText(value) {
+    return String(value || '').trim();
+  }
+
+  function sameUsername(left, right) {
+    return cleanText(left).toLowerCase() === cleanText(right).toLowerCase();
+  }
+
+  return { register, remove, broadcastDisconnect, handleTransferMessage };
 }
 
 function sendDeletedModAccountError(socket) {
@@ -794,7 +1114,7 @@ function attachModWebSocketServer(server, {
       }
 
       if (message.type === 'heartbeat') {
-        account = recordMinecraftAccountHeartbeat(db, account.id);
+        account = recordMinecraftAccountHeartbeat(db, account.id, { currentUserId: authContext.user.id });
         if (!account) {
           sendDeletedModAccountError(socket);
           return;
@@ -814,6 +1134,8 @@ function attachModWebSocketServer(server, {
           banReason: message.banReason,
           banUntil: message.banUntil,
           banId: message.banId,
+        }, {
+          currentUserId: authContext.user.id,
         });
         if (!account) {
           sendDeletedModAccountError(socket);
@@ -837,6 +1159,10 @@ function attachModWebSocketServer(server, {
         if (message.type === 'banned' && account.status === 'banned') {
           modConnections.broadcastDisconnect({ sourceSocket: socket, sourceAccount: account });
         }
+        return;
+      }
+
+      if (modConnections.handleTransferMessage(socket, message)) {
         return;
       }
 
