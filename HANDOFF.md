@@ -1,16 +1,16 @@
 # Test API Handoff
 
-Date: 2026-06-18
+Date: 2026-06-20
 Branch: `master`
-Latest local commit before this handoff: `6b4ad55 Relay transfer purse range`
+Latest local commit before this handoff: `afefcb9 Keep dashboard accounts active for live mod sockets`
 
 ## Current Setup
 
-- Local repo: `C:\Projects\Hypixel\Test API`
+- Local repo: `C:\Humane\Hypixel\Test API`
 - GitHub remote: `https://github.com/humane125/HypixelApi.git`
 - RDP deploy path: `C:\Hypixel`
 - RDP SSH target: `Administrator@23.26.77.96`
-- SSH key on this PC: `C:\Users\moham\.ssh\hypixel_rdp_ed25519`
+- SSH key on this PC: `%USERPROFILE%\.ssh\hypixel_rdp_ed25519`
 - Current public API URL: `https://humane-hypixel.duckdns.org`
 - Old ngrok URL is deprecated: `https://lazy-similarly-reaffirm.ngrok-free.dev`
 
@@ -28,6 +28,11 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
 - Public HTTPS returned `200` with dashboard title `Hypixel SkyBlock Control`.
 - Public websocket handshake to `wss://humane-hypixel.duckdns.org/api/mod/ws` opened successfully.
 - AutoAuction and Alt Manager configs in the 26.1.2 Prism instance were manually updated to the new DuckDNS base URL.
+- Dashboard account active-state was fixed after websocket reconnect/duplicate-socket cases:
+  - Dashboard account lists overlay live mod socket state for connected `active`/`hypixel` clients.
+  - An old mod socket closing no longer marks the account offline if another live socket for the same account is still connected.
+  - Explicit `offline` and `banned` mod status messages still display as offline/banned.
+- Commit `afefcb9` was pushed to GitHub, `server.js` was copied to `C:\Hypixel`, `HypixelApi` was restarted, and public HTTPS returned `200`.
 
 ## Current Behavior
 
@@ -38,6 +43,7 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
 - Existing Minecraft accounts keep current ownership; another user's API key cannot steal ownership.
 - Proxy lookup is Minecraft-account scoped.
 - Status updates apply to the existing account row, so an account can show live status without changing owner folder.
+- Dashboard account cards use live mod socket state when available, so reconnect races and duplicate sockets do not leave active accounts displayed as offline.
 - Stale `active` and `hypixel` accounts display as `offline` after heartbeat timeout.
 - Active timed bans are preserved through later updates until expiry.
 
@@ -86,7 +92,7 @@ schtasks /Run /TN HypixelApi
 Local repo:
 
 ```powershell
-cd "C:\Projects\Hypixel\Test API"
+cd "C:\Humane\Hypixel\Test API"
 npm test
 npm run build
 ```
@@ -119,11 +125,11 @@ $scp = "$env:WINDIR\System32\OpenSSH\scp.exe"
 Deploy changed server files:
 
 ```powershell
-& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\server.js" Administrator@23.26.77.96:C:/Hypixel/server.js
-& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\auth-db.js" Administrator@23.26.77.96:C:/Hypixel/auth-db.js
-& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\package.json" Administrator@23.26.77.96:C:/Hypixel/package.json
-& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Projects\Hypixel\Test API\package-lock.json" Administrator@23.26.77.96:C:/Hypixel/package-lock.json
-& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" -r "C:\Projects\Hypixel\Test API\public" Administrator@23.26.77.96:C:/Hypixel/
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\server.js" Administrator@23.26.77.96:C:/Hypixel/server.js
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\auth-db.js" Administrator@23.26.77.96:C:/Hypixel/auth-db.js
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\package.json" Administrator@23.26.77.96:C:/Hypixel/package.json
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" "C:\Humane\Hypixel\Test API\package-lock.json" Administrator@23.26.77.96:C:/Hypixel/package-lock.json
+& $scp -i "$env:USERPROFILE\.ssh\hypixel_rdp_ed25519" -r "C:\Humane\Hypixel\Test API\public" Administrator@23.26.77.96:C:/Hypixel/
 ```
 
 Restart API:
@@ -135,7 +141,7 @@ Restart API:
 ## Next Work
 
 1. Make `HypixelApi` more robust as a service or scheduled task that auto-starts on boot and restarts after crashes.
-2. Add websocket reconnect/backoff in the mods and resend current status after reconnect.
-3. Add dashboard visibility for connected mod clients, transfer session state, and last heartbeat.
+2. Add dashboard visibility for connected mod clients, transfer session state, and last heartbeat.
+3. Add a small admin/debug endpoint for connected mod sockets if more live-status issues appear.
 4. Add better transfer error reporting and optional persistent transfer audit logs.
 5. Keep the public URL standardized as `https://humane-hypixel.duckdns.org` in docs and runtime configs.
