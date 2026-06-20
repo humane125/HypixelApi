@@ -584,6 +584,72 @@ test('mod websocket marks account offline when the socket closes without an offl
   }
 });
 
+test('dashboard keeps account active when an older duplicate mod socket closes', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_duplicate_socket',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000021',
+        name: 'DuplicateSocketPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const firstSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  let secondSocket = null;
+  try {
+    await waitForSocketOpen(firstSocket);
+    firstSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_duplicate_socket',
+      username: 'DuplicateSocketPlayer',
+    }));
+    const firstAuth = await waitForSocketMessage(firstSocket);
+    assert.strictEqual(firstAuth.type, 'auth_ok');
+
+    secondSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+    await waitForSocketOpen(secondSocket);
+    secondSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_duplicate_socket',
+      username: 'DuplicateSocketPlayer',
+    }));
+    const secondAuth = await waitForSocketMessage(secondSocket);
+    assert.strictEqual(secondAuth.type, 'auth_ok');
+
+    firstSocket.close();
+    await new Promise((resolve, reject) => {
+      firstSocket.once('close', resolve);
+      firstSocket.once('error', reject);
+      setTimeout(() => reject(new Error('Timed out waiting for first socket close')), 1500);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const listed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: await loginDashboard(baseUrl) },
+    });
+    assert.strictEqual(listed.status, 200);
+    const accounts = (await listed.json()).accounts;
+    const account = accounts.find((row) => row.minecraft_username === 'DuplicateSocketPlayer');
+    assert.ok(account);
+    assert.strictEqual(account.status, 'active');
+  } finally {
+    closeSocketSilently(firstSocket);
+    if (secondSocket) closeSocketSilently(secondSocket);
+    await close(server);
+  }
+});
+
 test('mod websocket closes cleanly when the dashboard deleted its account while connected', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });

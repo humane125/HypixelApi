@@ -582,11 +582,15 @@ function sendSocketJson(socket, payload) {
 
 function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
   const clients = new Set();
+  let getLiveAccountStatuses = () => [];
 
   function accountsMessage() {
     return {
       type: 'accounts',
-      accounts: listMinecraftAccounts(db, { heartbeatWindowMs }),
+      accounts: applyLiveAccountStatuses(
+        listMinecraftAccounts(db, { heartbeatWindowMs }),
+        getLiveAccountStatuses()
+      ),
       sentAt: new Date().toISOString(),
     };
   }
@@ -612,7 +616,11 @@ function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
     }
   }
 
-  return { attach, broadcast };
+  function setLiveAccountStatusProvider(provider) {
+    getLiveAccountStatuses = typeof provider === 'function' ? provider : () => [];
+  }
+
+  return { attach, broadcast, setLiveAccountStatusProvider };
 }
 
 function createModConnectionRegistry() {
@@ -651,6 +659,33 @@ function createModConnectionRegistry() {
         minecraftUsername: client.account.minecraft_username,
         status: client.account.status || 'active',
       }));
+  }
+
+  function liveAccountStatuses() {
+    pruneClosedClients();
+    const byAccountId = new Map();
+    for (const client of clients) {
+      if (!client.account || !client.account.id) continue;
+      if (!['active', 'hypixel'].includes(client.account.status)) continue;
+      const liveStatus = client.account.status === 'hypixel' ? 'hypixel' : 'active';
+      byAccountId.set(client.account.id, {
+        accountId: client.account.id,
+        status: liveStatus,
+        currentUserId: client.auth && client.auth.user ? client.auth.user.id : null,
+        currentUsername: client.auth && client.auth.user ? client.auth.user.username : null,
+      });
+    }
+    return [...byAccountId.values()];
+  }
+
+  function hasLiveAccountConnection(accountId, exceptSocket = null) {
+    pruneClosedClients();
+    return [...clients].some((client) => (
+      client.socket !== exceptSocket
+      && client.account
+      && client.account.id === accountId
+      && ['active', 'hypixel'].includes(client.account.status)
+    ));
   }
 
   function handleTransferMessage(socket, message) {
@@ -1064,7 +1099,22 @@ function createModConnectionRegistry() {
     return cleanText(left).toLowerCase() === cleanText(right).toLowerCase();
   }
 
-  return { register, remove, broadcastDisconnect, handleTransferMessage };
+  return { register, remove, broadcastDisconnect, handleTransferMessage, liveAccountStatuses, hasLiveAccountConnection };
+}
+
+function applyLiveAccountStatuses(accounts, liveStatuses) {
+  if (!Array.isArray(liveStatuses) || liveStatuses.length === 0) return accounts;
+  const liveByAccountId = new Map(liveStatuses.map((status) => [status.accountId, status]));
+  return accounts.map((account) => {
+    const live = liveByAccountId.get(account.id);
+    if (!live || account.status === 'banned') return account;
+    return {
+      ...account,
+      status: live.status,
+      current_user_id: live.currentUserId || account.current_user_id || null,
+      current_username: live.currentUsername || account.current_username || null,
+    };
+  });
 }
 
 function sendDeletedModAccountError(socket) {
@@ -1088,6 +1138,7 @@ function attachModWebSocketServer(server, {
   const modSocketServer = enabled ? new WebSocketServer({ noServer: true }) : null;
   const dashboardSocketServer = dashboardAccounts ? new WebSocketServer({ noServer: true }) : null;
   const modConnections = createModConnectionRegistry();
+  dashboardAccounts?.setLiveAccountStatusProvider(() => modConnections.liveAccountStatuses());
   server.on('upgrade', (req, socket, head) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (parsedUrl.pathname === '/api/mod/ws' && modSocketServer) {
@@ -1120,7 +1171,7 @@ function attachModWebSocketServer(server, {
   }
 
   if (!modSocketServer) {
-    return { modSocketServer, dashboardSocketServer };
+    return { modSocketServer, dashboardSocketServer, modConnections };
   }
 
   modSocketServer.on('connection', (socket, req) => {
@@ -1130,7 +1181,9 @@ function attachModWebSocketServer(server, {
       if (!authContext || !account || !account.id) {
         return;
       }
-      account = recordMinecraftAccountConnectionStatus(db, account.id, 'offline');
+      if (!modConnections.hasLiveAccountConnection(account.id, socket)) {
+        account = recordMinecraftAccountConnectionStatus(db, account.id, 'offline');
+      }
       dashboardAccounts?.broadcast();
     });
 
@@ -1260,7 +1313,7 @@ function attachModWebSocketServer(server, {
     });
   });
 
-  return { modSocketServer, dashboardSocketServer };
+  return { modSocketServer, dashboardSocketServer, modConnections };
 }
 
 function createAppServer(options = {}) {
@@ -1288,6 +1341,13 @@ function createAppServer(options = {}) {
   const secureCookies = options.secureCookies;
 
   const accountHeartbeatWindowMs = options.accountHeartbeatWindowMs || DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS;
+  let getLiveAccountStatuses = () => [];
+  function listDashboardMinecraftAccounts() {
+    return applyLiveAccountStatuses(
+      listMinecraftAccounts(db, { heartbeatWindowMs: accountHeartbeatWindowMs }),
+      getLiveAccountStatuses()
+    );
+  }
   const dashboardAccounts = db
     ? createDashboardAccountBroadcaster({ db, heartbeatWindowMs: accountHeartbeatWindowMs })
     : null;
@@ -1539,7 +1599,7 @@ function createAppServer(options = {}) {
         writeJson(res, access.status, access.payload);
         return;
       }
-      writeJson(res, 200, { accounts: listMinecraftAccounts(db, { heartbeatWindowMs: accountHeartbeatWindowMs }) });
+      writeJson(res, 200, { accounts: listDashboardMinecraftAccounts() });
       return;
     }
 
@@ -1870,13 +1930,17 @@ function createAppServer(options = {}) {
     });
   });
 
-  attachModWebSocketServer(server, {
+  const socketServers = attachModWebSocketServer(server, {
     db,
     fetchImpl,
     enabled: options.modWebSocket !== false,
     authorizeDashboard,
     dashboardAccounts,
   });
+  if (socketServers && socketServers.modConnections) {
+    getLiveAccountStatuses = () => socketServers.modConnections.liveAccountStatuses();
+    dashboardAccounts?.setLiveAccountStatusProvider(getLiveAccountStatuses);
+  }
   return server;
 }
 
