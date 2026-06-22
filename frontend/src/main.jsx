@@ -30,6 +30,7 @@ import {
   X,
 } from 'lucide-react';
 import './styles.css';
+import { mergeProxyDraftsFromAccounts, proxyDraftFromAccount, proxyDraftsFromAccounts } from './proxyDrafts.mjs';
 
 const TOKEN_STORAGE_KEY = 'auctionApiToken';
 
@@ -84,21 +85,6 @@ const defaultAccountForm = {
   minecraftUsername: '',
   notes: '',
 };
-
-function proxyDraftFromAccount(account) {
-  return {
-    proxyEnabled: Boolean(account.proxy_enabled),
-    proxyType: account.proxy_type || 'SOCKS5',
-    proxyHost: account.proxy_host || '',
-    proxyPort: account.proxy_port ? String(account.proxy_port) : '',
-    proxyUsername: account.proxy_username || '',
-    proxyPassword: '',
-  };
-}
-
-function proxyDraftsFromAccounts(accounts) {
-  return Object.fromEntries((accounts || []).map((account) => [account.id, proxyDraftFromAccount(account)]));
-}
 
 const defaultKeyForm = {
   userId: '',
@@ -1273,8 +1259,9 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'accounts') {
-          setAccounts(data.accounts || []);
-          setProxyDrafts(proxyDraftsFromAccounts(data.accounts || []));
+          const nextAccounts = data.accounts || [];
+          setAccounts(nextAccounts);
+          setProxyDrafts((current) => mergeProxyDraftsFromAccounts(nextAccounts, current, activeProxyAccountId));
         } else if (data.type === 'live_control_snapshot') {
           setLiveControlByAccountId(liveControlStateMap(data.accounts));
         } else if (data.type === 'live_control_update') {
@@ -1334,7 +1321,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       }
       socket.close();
     };
-  }, [me, clearScreenshotTimeout]);
+  }, [activeProxyAccountId, me, clearScreenshotTimeout]);
 
   useEffect(() => () => {
     for (const timer of screenshotTimeoutsRef.current.values()) {
