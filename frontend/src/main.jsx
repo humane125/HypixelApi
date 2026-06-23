@@ -1044,8 +1044,11 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
                 <div className="remote-screenshot-overlay">
                   <span>{screenshotAgeMs != null && Number.isFinite(screenshotAgeMs) ? `${Math.max(0, Math.round(screenshotAgeMs / 1000))}s ago` : 'Latest'}</span>
                 </div>
-                <button className="remote-enlarge-button" type="button" onClick={() => setIsScreenshotExpanded(true)}>
-                  <ExternalLink size={16} aria-hidden="true" />Click to enlarge
+                <button className="remote-enlarge-button" type="button" onClick={() => setIsScreenshotExpanded(true)} aria-label="Open screenshot preview">
+                  <span className="remote-enlarge-pill">
+                    <ExternalLink size={16} aria-hidden="true" />
+                    Click to enlarge
+                  </span>
                 </button>
               </>
             ) : (
@@ -1181,6 +1184,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const [liveControlByAccountId, setLiveControlByAccountId] = useState({});
   const [nowMs, setNowMs] = useState(Date.now());
   const [activeAccountFolder, setActiveAccountFolder] = useState('all');
+  const [screenshotRefreshNonce, setScreenshotRefreshNonce] = useState(0);
   const dashboardSocketRef = useRef(null);
   const screenshotTimeoutsRef = useRef(new Map());
 
@@ -1659,6 +1663,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     }));
     socket.send(JSON.stringify({ type: 'request_screenshot', accountId }));
     if (!quiet) {
+      setScreenshotRefreshNonce((current) => current + 1);
       setStatusMessage('Screenshot refresh requested');
     }
   }, [clearScreenshotTimeout]);
@@ -1671,7 +1676,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       requestLiveScreenshot(remoteAccount.id, { quiet: true });
     }, 30_000);
     return () => window.clearInterval(timer);
-  }, [remoteAccount?.id, remoteAccountStatus, requestLiveScreenshot]);
+  }, [remoteAccount?.id, remoteAccountStatus, requestLiveScreenshot, screenshotRefreshNonce]);
 
   if (dashboardLoading && !me) {
     return (

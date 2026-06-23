@@ -1099,7 +1099,7 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: minmax(0, 1.9fr) minmax(320px, 0.7fr);
   gap: 22px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .remote-panel {
@@ -1113,7 +1113,7 @@ tbody tr:hover {
 
 .remote-screenshot-panel {
   display: grid;
-  grid-template-rows: auto minmax(540px, 1fr);
+  grid-template-rows: auto minmax(420px, 1fr);
 }
 
 .remote-instance-head {
@@ -1221,7 +1221,7 @@ tbody tr:hover {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 540px;
+  min-height: 420px;
   background: #05080c;
 }
 
@@ -1230,13 +1230,25 @@ tbody tr:hover {
   height: 100%;
   object-fit: contain;
   background: #05080c;
-  transition: opacity 180ms ease, filter 180ms ease, transform 180ms ease;
+  transition: opacity 500ms ease, filter 500ms ease, transform 500ms ease;
+}
+
+.remote-screenshot-stage:hover img:not(.is-loading) {
+  transform: scale(1.01);
 }
 
 .remote-screenshot-stage img.is-loading {
   opacity: 0.45;
   filter: blur(1px);
   transform: scale(1.005);
+}
+
+.remote-screenshot-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to top right, rgba(37, 99, 235, 0.04), transparent 42%);
 }
 
 .spin-icon {
@@ -1343,34 +1355,36 @@ tbody tr:hover {
 .remote-enlarge-button {
   position: absolute;
   inset: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
   border: 0;
-  background: rgba(0, 0, 0, 0);
-  color: transparent;
+  background: transparent;
+  opacity: 0;
+  color: #05080c;
+  cursor: zoom-in;
+  transition: opacity 300ms ease, background 300ms ease, backdrop-filter 300ms ease;
 }
 
-.remote-enlarge-button:not(:disabled):hover {
+.remote-enlarge-button:hover {
   background: rgba(0, 0, 0, 0.2);
-  color: #071018;
-  cursor: pointer;
+  opacity: 1;
+  backdrop-filter: blur(1px);
 }
 
-.remote-enlarge-button:not(:disabled):hover::before {
-  content: "";
-  position: absolute;
-  width: 168px;
-  height: 40px;
-  border-radius: 7px;
+.remote-enlarge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 24px;
+  border-radius: 8px;
   background: #fff;
+  color: #05080c;
+  font-size: 0.86rem;
+  font-weight: 800;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
-}
-
-.remote-enlarge-button svg,
-.remote-enlarge-button {
-  z-index: 1;
 }
 
 .remote-empty-screenshot,
@@ -1494,6 +1508,7 @@ tbody tr:hover {
   flex-direction: column;
   gap: 16px;
   padding: 22px;
+  align-self: start;
 }
 
 .remote-section-title {
