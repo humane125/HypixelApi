@@ -1,8 +1,8 @@
 # Test API Handoff
 
-Date: 2026-06-20
+Date: 2026-06-23
 Branch: `master`
-Latest local commit before this handoff: `afefcb9 Keep dashboard accounts active for live mod sockets`
+Latest pushed/deployed commit before this handoff: `86acad0 Use account keys for remote control routes`
 
 ## Current Setup
 
@@ -33,6 +33,29 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
   - An old mod socket closing no longer marks the account offline if another live socket for the same account is still connected.
   - Explicit `offline` and `banned` mod status messages still display as offline/banned.
 - Commit `afefcb9` was pushed to GitHub, `server.js` was copied to `C:\Hypixel`, `HypixelApi` was restarted, and public HTTPS returned `200`.
+- Dashboard frontend was restyled locally and then deployed to the RDP.
+- Dashboard landing route is now `/`; auctions are on `/auctions`.
+- Dashboard session restore no longer flashes the login form while `/api/dashboard/me` is checking.
+- Account cards now keep four cards per row on wide dashboard layouts.
+- Account card `Connect` now opens a dedicated remote-control page instead of a modal.
+- Remote-control routes use stable Minecraft account keys:
+  - Dashboard-generated links use `/remote/<minecraft_uuid>`.
+  - Manual URLs also resolve by UUID without dashes, Minecraft username, or old numeric dashboard ID for backward compatibility.
+- The remote-control page layout was based on `C:\Humane\Website\src\pages\RemoteControl.tsx`; that old Website project was read-only and was not modified.
+- Remote-control API/dashboard protocol shell was added and deployed:
+  - Dashboard websocket can send `request_screenshot`.
+  - API relays `request_screenshot` to the connected mod socket for that account.
+  - Mod websocket can send `client_screenshot`.
+  - Mod websocket can send `client_log`.
+  - API stores remote-control state in memory and broadcasts `live_control_snapshot`, `live_control_update`, and `live_control_error` to dashboard websockets.
+- Commits pushed and deployed after the older handoff:
+  - `a960b44 Add dashboard live control shell`
+  - `618ddc6 Route remote control to its own page`
+  - `86acad0 Use account keys for remote control routes`
+- RDP deployment copied updated `server.js` and `public/` to `C:\Hypixel`, triggered `HypixelApi`, and verified:
+  - `https://humane-hypixel.duckdns.org/remote/LibraryOfStupid` returned `200`.
+  - `https://humane-hypixel.duckdns.org/assets/index-C2OLYvYc.js` returned `200`.
+  - RDP scheduled task `HypixelApi` status was `Running`.
 
 ## Current Behavior
 
@@ -46,6 +69,61 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
 - Dashboard account cards use live mod socket state when available, so reconnect races and duplicate sockets do not leave active accounts displayed as offline.
 - Stale `active` and `hypixel` accounts display as `offline` after heartbeat timeout.
 - Active timed bans are preserved through later updates until expiry.
+- Dashboard links:
+  - `/` shows the dashboard.
+  - `/auctions` shows auction search.
+  - `/remote/<minecraft_uuid_or_username>` shows the remote-control page for a registered account.
+- Remote-control page currently shows:
+  - account identity and status
+  - large screenshot panel
+  - screenshot refresh button
+  - in-game/client log panel
+  - disabled Send Action panel for the next protocol slice
+- Remote-control data is memory-only. It resets when `HypixelApi` restarts.
+
+## Remote Control Protocol
+
+Dashboard to API websocket:
+
+- `request_screenshot`
+
+API to mod websocket:
+
+- `request_screenshot`
+
+Mod to API websocket:
+
+- `client_screenshot`
+- `client_log`
+
+API to dashboard websocket:
+
+- `live_control_snapshot`
+- `live_control_update`
+- `live_control_error`
+
+Expected screenshot payload from mod:
+
+```json
+{
+  "type": "client_screenshot",
+  "imageMime": "image/jpeg",
+  "imageBase64": "<base64 image>",
+  "capturedAt": "2026-06-23T00:00:00.000Z"
+}
+```
+
+Expected log payload from mod:
+
+```json
+{
+  "type": "client_log",
+  "level": "info",
+  "message": "Handoff complete, new account is Username"
+}
+```
+
+`level` may be `debug`, `info`, `warn`, or `error`. The API strips Minecraft color codes from `client_log.message` before sending it to dashboards.
 
 ## Connected Transfer Protocol
 
@@ -139,6 +217,44 @@ Restart API:
 ```
 
 ## Next Work
+
+Immediate next slice is mod-side remote control:
+
+1. In AutoAuction mod, add websocket handling for API message `request_screenshot`.
+2. Capture the Minecraft framebuffer when `request_screenshot` arrives.
+3. Encode the capture as JPEG or PNG base64.
+4. Send `client_screenshot` back over `/api/mod/ws`.
+5. Add a small mod helper for sending `client_log` without leaking API keys or secrets.
+6. Emit `client_log` for important events:
+   - handoff complete
+   - transfer started
+   - transfer stopped/cancelled
+   - buy order created
+   - instant sell completed
+   - sell order created
+   - transfer cycle complete
+   - purse before/after/delta
+   - menu stuck/error state
+7. Test from the dashboard:
+   - open an account card with `Connect`
+   - verify URL is `/remote/<minecraft_uuid>`
+   - click `Refresh`
+   - verify screenshot appears
+   - trigger one mod event and verify it appears in In-game Logs without reloading
+
+After screenshot/logs work:
+
+1. Wire the disabled Send Action panel.
+2. Add dashboard-to-API websocket message for remote actions.
+3. Relay actions API-to-mod only for the selected connected account.
+4. Support three action types:
+   - server command, for example `/bz` or `/warp end`
+   - normal chat message
+   - client-side mod command/action
+5. Add API tests for action relay and offline-account errors.
+6. Add mod tests for command payload parsing and rejection of invalid action types.
+
+Other backlog:
 
 1. Make `HypixelApi` more robust as a service or scheduled task that auto-starts on boot and restarts after crashes.
 2. Add dashboard visibility for connected mod clients, transfer session state, and last heartbeat.
