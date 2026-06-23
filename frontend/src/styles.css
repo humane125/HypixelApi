@@ -47,11 +47,11 @@ textarea {
 }
 
 .app-shell {
-  width: min(1520px, calc(100vw - 40px));
+  width: min(1600px, calc(100vw - 56px));
   margin: 0 auto;
   padding: 26px 0 44px;
   display: grid;
-  gap: 16px;
+  gap: 22px;
 }
 
 .topbar,
@@ -214,8 +214,8 @@ small {
 .folder-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 20px;
 }
 
 .folder-tabs button {
@@ -407,11 +407,11 @@ textarea:focus {
 .stats-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
 }
 
 .stat-card {
-  padding: 17px;
+  padding: 20px;
   display: grid;
   gap: 8px;
   border-left: 4px solid rgba(117, 167, 255, 0.4);
@@ -459,22 +459,22 @@ textarea:focus {
 
 .dashboard-workspace {
   display: grid;
-  grid-template-columns: minmax(280px, 304px) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(330px, 360px) minmax(0, 1fr);
+  gap: 22px;
   align-items: start;
 }
 
 .dashboard-sidebar {
   display: grid;
-  gap: 12px;
+  gap: 16px;
   position: sticky;
   top: 16px;
 }
 
 .dashboard-main {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: 1fr;
+  gap: 20px;
   min-width: 0;
 }
 
@@ -485,15 +485,17 @@ textarea:focus {
 
 .dashboard-users-panel {
   order: 2;
+  grid-column: 1 / -1;
 }
 
 .api-keys-panel {
   order: 3;
+  grid-column: 1 / -1;
 }
 
 .dashboard-users-panel table,
 .api-keys-panel table {
-  min-width: 0;
+  min-width: 980px;
 }
 
 .dashboard-users-panel th,
@@ -510,7 +512,7 @@ textarea:focus {
 
 .scope-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
@@ -525,6 +527,13 @@ textarea:focus {
   background: rgba(5, 8, 12, 0.58);
   color: var(--muted);
   font-weight: 700;
+  overflow: hidden;
+}
+
+.scope-check span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scope-check input {
@@ -555,7 +564,7 @@ code {
 }
 
 .results-panel {
-  padding: 17px;
+  padding: 22px;
   background: linear-gradient(180deg, rgba(18, 26, 38, 0.96), rgba(12, 17, 24, 0.98));
 }
 
@@ -564,7 +573,7 @@ code {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  margin-bottom: 12px;
+  margin-bottom: 18px;
 }
 
 .pill,
@@ -600,7 +609,7 @@ table {
 
 th,
 td {
-  padding: 12px 10px;
+  padding: 14px 14px;
   border-bottom: 1px solid rgba(98, 119, 145, 0.18);
   text-align: left;
   vertical-align: middle;
@@ -713,14 +722,14 @@ tbody tr:hover {
 
 .account-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 18px;
 }
 
 .account-card {
   display: grid;
   gap: 14px;
-  padding: 14px;
+  padding: 16px;
   min-height: 100%;
   background: linear-gradient(180deg, rgba(13, 18, 26, 0.98), rgba(9, 13, 19, 0.98));
   border: 1px solid rgba(98, 119, 145, 0.24);
@@ -1064,9 +1073,12 @@ tbody tr:hover {
 
   .stats-row,
   .dashboard-grid,
-  .dashboard-workspace,
-  .dashboard-main {
+  .dashboard-workspace {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-main {
+    grid-template-columns: 1fr;
   }
 
   .dashboard-sidebar,
@@ -1076,7 +1088,7 @@ tbody tr:hover {
 
   .dashboard-sidebar {
     position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
   }
 }
 
