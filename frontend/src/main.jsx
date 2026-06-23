@@ -298,15 +298,34 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <h1><span>SkyBlock</span> Control</h1>
-          <p className="muted">Auction pricing, API keys, and registered Minecraft accounts</p>
+        <div className="brand-block">
+          <div className="brand-mark" aria-hidden="true">◆</div>
+          <div>
+            <h1><span>SkyBlock</span> Control</h1>
+            <p className="muted">Auction pricing, API keys, and registered Minecraft accounts</p>
+          </div>
         </div>
         <div className="topbar-actions">
           <nav className="view-tabs" aria-label="Primary views">
             <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => setActiveView('auctions')}>Auctions</button>
             <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setActiveView('dashboard')}>Dashboard</button>
           </nav>
+          {activeView === 'dashboard' ? (
+            <div className="topbar-metrics" aria-label="Dashboard status">
+              <div>
+                <span>API Status</span>
+                <strong className="online-dot">Online</strong>
+              </div>
+              <div>
+                <span>Session</span>
+                <strong>Local</strong>
+              </div>
+              <div>
+                <span>Mode</span>
+                <strong>Review</strong>
+              </div>
+            </div>
+          ) : null}
           {activeView === 'auctions' ? (
             <input
               className="token-input"
@@ -1119,7 +1138,8 @@ function DashboardView() {
         <StatCard title="Active API Keys" value={formatNumber(activeKeyCount)} detail={`${formatNumber(apiKeys.length)} total keys`} variant="recommendation" />
       </section>
 
-      <section className="dashboard-grid">
+      <section className="dashboard-workspace">
+        <aside className="dashboard-sidebar">
         {canManageAccounts ? (
           <div className="control-panel">
           <div className="section-heading">
@@ -1202,10 +1222,12 @@ function DashboardView() {
           ) : null}
         </div>
         ) : null}
-      </section>
+        </aside>
+
+        <div className="dashboard-main">
 
       {canManageUsers ? (
-        <section className="results-panel">
+        <section className="results-panel dashboard-users-panel">
           <div className="section-heading">
             <h2>Dashboard Users</h2>
             <span className="pill">{dashboardUsers.length} users</span>
@@ -1258,7 +1280,7 @@ function DashboardView() {
         </section>
       ) : null}
 
-      <section className="results-panel">
+      <section className="results-panel account-panel">
         <div className="section-heading">
           <h2>{selectedAccountFolder === 'banned' ? 'Banned Accounts' : 'Minecraft Accounts'}</h2>
           <span className="pill">{visibleAccounts.length} shown</span>
@@ -1384,7 +1406,7 @@ function DashboardView() {
       </section>
 
       {canManageUsers ? (
-      <section className="results-panel">
+      <section className="results-panel api-keys-panel">
         <div className="section-heading">
           <h2>API Keys</h2>
           <span className="pill">{apiKeys.length} total</span>
@@ -1421,6 +1443,9 @@ function DashboardView() {
         </div>
       </section>
       ) : null}
+
+        </div>
+      </section>
 
       {canManageAccounts && activeProxyAccount ? (
         <ProxyConfigModal
