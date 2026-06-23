@@ -13,6 +13,7 @@ import {
   Gavel,
   KeyRound,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Monitor,
   Plus,
@@ -828,11 +829,25 @@ function liveControlStateMap(accounts) {
 
 function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
   const logs = state?.logs || [];
+  const logLines = [...logs].reverse();
   const screenshot = state?.screenshot || null;
   const lastError = state?.lastError || null;
+  const isScreenshotLoading = Boolean(state?.isScreenshotLoading);
   const displayStatus = displayAccountStatus(account, nowMs);
   const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
   const screenshotAgeMs = screenshot?.capturedAt ? Date.now() - Date.parse(screenshot.capturedAt) : null;
+  const logScrollRef = useRef(null);
+  const [isLogsFollowing, setIsLogsFollowing] = useState(true);
+
+  useEffect(() => {
+    if (!isLogsFollowing) return;
+    window.requestAnimationFrame(() => {
+      if (logScrollRef.current) {
+        logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
+      }
+    });
+  }, [logLines.length, isLogsFollowing, account.id]);
+
   return (
     <section className="remote-page">
       <div className="remote-page-head">
@@ -840,8 +855,9 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
           <h2>Remote Control</h2>
           <p className="muted">Monitor and manage the connected Minecraft instance.</p>
         </div>
-        <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
-          <RefreshCw size={15} aria-hidden="true" />Refresh Status
+        <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)} disabled={isScreenshotLoading}>
+          {isScreenshotLoading ? <Loader2 size={15} aria-hidden="true" className="spin-icon" /> : <RefreshCw size={15} aria-hidden="true" />}
+          {isScreenshotLoading ? 'Refreshing' : 'Refresh Status'}
         </button>
       </div>
 
@@ -866,7 +882,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
                 </div>
                 <div className="remote-meta-line">
                   <span><Clock size={14} aria-hidden="true" />Last update {state?.updatedAt ? new Date(state.updatedAt).toLocaleTimeString() : 'Waiting'}</span>
-                  <span>{lastError?.message || (screenshot ? 'Live screenshot ready' : 'Waiting for first screenshot')}</span>
+                  <span>{lastError?.message || (isScreenshotLoading ? 'Refreshing screenshot' : screenshot ? 'Live screenshot ready' : 'Waiting for first screenshot')}</span>
                 </div>
               </div>
             </div>
@@ -875,8 +891,9 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
                 <span>Status</span>
                 <strong className={isOnline ? 'remote-online' : ''}>{isOnline ? 'Connected' : 'Offline'}</strong>
               </div>
-              <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
-                <RefreshCw size={15} aria-hidden="true" />Refresh
+              <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)} disabled={isScreenshotLoading}>
+                {isScreenshotLoading ? <Loader2 size={15} aria-hidden="true" className="spin-icon" /> : <RefreshCw size={15} aria-hidden="true" />}
+                {isScreenshotLoading ? 'Refreshing' : 'Refresh'}
               </button>
             </div>
           </div>
@@ -891,9 +908,18 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
             {screenshot?.imageBase64 ? (
               <>
                 <img
+                  className={isScreenshotLoading ? 'is-loading' : ''}
                   src={`data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`}
                   alt={`${account.minecraft_username} game screenshot`}
                 />
+                {isScreenshotLoading ? (
+                  <div className="remote-loading-overlay" aria-live="polite" aria-label="Refreshing screenshot">
+                    <div className="remote-loading-dot" />
+                    <div className="remote-loading-ring">
+                      <Loader2 size={38} aria-hidden="true" className="spin-icon" />
+                    </div>
+                  </div>
+                ) : null}
                 <div className="remote-screenshot-overlay">
                   <span>{screenshotAgeMs != null && Number.isFinite(screenshotAgeMs) ? `${Math.max(0, Math.round(screenshotAgeMs / 1000))}s ago` : 'Latest'}</span>
                 </div>
@@ -904,7 +930,15 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
             ) : (
               <div className="remote-empty-screenshot">
                 <div><Monitor size={42} aria-hidden="true" /></div>
-                <p>Waiting for the first screenshot from this instance.</p>
+                {isScreenshotLoading ? (
+                  <div className="remote-loading-inline" aria-live="polite">
+                    <div className="remote-loading-dot" />
+                    <div className="remote-loading-ring">
+                      <Loader2 size={34} aria-hidden="true" className="spin-icon" />
+                    </div>
+                  </div>
+                ) : null}
+                <p>{isScreenshotLoading ? 'Requesting a fresh screenshot from this instance.' : 'Waiting for the first screenshot from this instance.'}</p>
                 <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
                   <Camera size={15} aria-hidden="true" />Request Screenshot
                 </button>
@@ -954,17 +988,42 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
               <p className="muted">Recent chat and system outputs.</p>
             </div>
           </div>
-          <span className={`status-badge live-status-badge ${isOnline ? 'active' : 'offline'}`}>
-            <span className="status-word">{isOnline ? 'Live' : 'Offline'}</span>
-          </span>
+          <div className="remote-log-actions">
+            <span className={`status-badge live-status-badge ${isOnline ? 'active' : 'offline'}`}>
+              <span className="status-word">{isOnline ? 'Live' : 'Offline'}</span>
+            </span>
+            <button
+              className="btn secondary compact remote-follow-button"
+              type="button"
+              onClick={() => {
+                setIsLogsFollowing(true);
+                if (logScrollRef.current) {
+                  logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
+                }
+              }}
+            >
+              <RefreshCw size={14} aria-hidden="true" />
+              {isLogsFollowing ? 'Following' : 'Focus Latest'}
+            </button>
+          </div>
         </div>
-        <div className="remote-log-list">
-          {logs.length ? (
+        <div
+          className="remote-log-list"
+          ref={logScrollRef}
+          onScroll={() => {
+            const element = logScrollRef.current;
+            if (!element) return;
+            const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+            setIsLogsFollowing(distanceFromBottom <= 48);
+          }}
+        >
+          {logLines.length ? (
             <div className="remote-log-lines">
-              {logs.map((entry) => (
+              {logLines.map((entry) => (
                 <div className={`remote-log-line ${entry.level || 'info'}`} key={entry.id || `${entry.createdAt}-${entry.message}`}>
                   <time>{entry.createdAt ? new Date(entry.createdAt).toLocaleTimeString() : '--:--:--'}</time>
-                  <span>[{entry.level || 'info'}]</span>
+                  <span className="remote-log-source">[System]</span>
+                  <span className="remote-log-level">[{entry.level || 'info'}]</span>
                   <p>{entry.message}</p>
                 </div>
               ))}
@@ -1000,6 +1059,15 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const [nowMs, setNowMs] = useState(Date.now());
   const [activeAccountFolder, setActiveAccountFolder] = useState('all');
   const dashboardSocketRef = useRef(null);
+  const screenshotTimeoutsRef = useRef(new Map());
+
+  const clearScreenshotTimeout = useCallback((accountId) => {
+    const timer = screenshotTimeoutsRef.current.get(Number(accountId));
+    if (timer) {
+      window.clearTimeout(timer);
+      screenshotTimeoutsRef.current.delete(Number(accountId));
+    }
+  }, []);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -1053,17 +1121,32 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
         } else if (data.type === 'live_control_snapshot') {
           setLiveControlByAccountId(liveControlStateMap(data.accounts));
         } else if (data.type === 'live_control_update') {
-          setLiveControlByAccountId((current) => ({
-            ...current,
-            [data.accountId]: data.state || {},
-          }));
+          const incomingState = data.state || {};
+          const hasScreenshot = Boolean(incomingState.screenshot?.imageBase64);
+          if (hasScreenshot) {
+            clearScreenshotTimeout(data.accountId);
+          }
+          setLiveControlByAccountId((current) => {
+            const previous = current[data.accountId] || {};
+            return {
+              ...current,
+              [data.accountId]: {
+                ...previous,
+                ...incomingState,
+                lastError: hasScreenshot ? null : previous.lastError,
+                isScreenshotLoading: hasScreenshot ? false : Boolean(previous.isScreenshotLoading),
+              },
+            };
+          });
         } else if (data.type === 'live_control_error') {
           setStatusMessage(data.message || 'Live control request failed');
           if (data.accountId) {
+            clearScreenshotTimeout(data.accountId);
             setLiveControlByAccountId((current) => ({
               ...current,
               [data.accountId]: {
                 ...(current[data.accountId] || {}),
+                isScreenshotLoading: false,
                 lastError: {
                   code: data.code || 'live_control_error',
                   message: data.message || 'Live control request failed',
@@ -1091,7 +1174,14 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       }
       socket.close();
     };
-  }, [me]);
+  }, [me, clearScreenshotTimeout]);
+
+  useEffect(() => () => {
+    for (const timer of screenshotTimeoutsRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    screenshotTimeoutsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!accounts.some((account) => (
@@ -1391,11 +1481,13 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const requestLiveScreenshot = useCallback((accountId) => {
     const socket = dashboardSocketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
+      clearScreenshotTimeout(accountId);
       setStatusMessage('Dashboard live updates are not connected');
       setLiveControlByAccountId((current) => ({
         ...current,
         [accountId]: {
           ...(current[accountId] || {}),
+          isScreenshotLoading: false,
           lastError: {
             code: 'dashboard_socket_closed',
             message: 'Dashboard live updates are not connected',
@@ -1405,16 +1497,35 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       }));
       return;
     }
+    clearScreenshotTimeout(accountId);
+    const timer = window.setTimeout(() => {
+      screenshotTimeoutsRef.current.delete(Number(accountId));
+      setLiveControlByAccountId((current) => ({
+        ...current,
+        [accountId]: {
+          ...(current[accountId] || {}),
+          isScreenshotLoading: false,
+          lastError: {
+            code: 'screenshot_timeout',
+            message: 'Screenshot request timed out',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      }));
+      setStatusMessage('Screenshot request timed out');
+    }, 15000);
+    screenshotTimeoutsRef.current.set(Number(accountId), timer);
     setLiveControlByAccountId((current) => ({
       ...current,
       [accountId]: {
         ...(current[accountId] || {}),
+        isScreenshotLoading: true,
         lastError: null,
       },
     }));
     socket.send(JSON.stringify({ type: 'request_screenshot', accountId }));
     setStatusMessage('Screenshot refresh requested');
-  }, []);
+  }, [clearScreenshotTimeout]);
 
   if (dashboardLoading && !me) {
     return (
