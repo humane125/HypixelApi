@@ -942,8 +942,11 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
   );
 }
 
-function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
+function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendAction, onBack }) {
   const [isScreenshotExpanded, setIsScreenshotExpanded] = useState(false);
+  const [actionType, setActionType] = useState('server_command');
+  const [actionDraft, setActionDraft] = useState('');
+  const [isActionSending, setIsActionSending] = useState(false);
   const logs = state?.logs || [];
   const chatLogs = logs.filter((entry) => String(entry.source || '').toLowerCase() === 'chat');
   const autoAuctionLogs = logs.filter((entry) => String(entry.source || 'system').toLowerCase() !== 'chat');
@@ -957,6 +960,24 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
   const screenshotDataUrl = screenshot?.imageBase64
     ? `data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`
     : null;
+  const actionPrefix = actionType === 'text_message' ? '' : '/';
+  const actionPlaceholder = actionType === 'client_command'
+    ? 'autoauction'
+    : actionType === 'server_command'
+      ? 'warp end'
+      : 'hello there';
+  const canSendAction = isOnline && !isActionSending && actionDraft.trim().length > 0;
+
+  const submitRemoteAction = async (event) => {
+    event.preventDefault();
+    if (!canSendAction) return;
+    setIsActionSending(true);
+    const sent = await onSendAction(account.id, actionType, actionDraft);
+    if (sent) {
+      setActionDraft('');
+    }
+    setIsActionSending(false);
+  };
 
   useEffect(() => {
     if (!isScreenshotExpanded) return undefined;
@@ -1073,7 +1094,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
           </div>
         </section>
 
-        <form className="remote-panel remote-action-panel" onSubmit={(event) => event.preventDefault()}>
+        <form className="remote-panel remote-action-panel" onSubmit={submitRemoteAction}>
           <div className="remote-section-title">
             <div><Send size={18} aria-hidden="true" /></div>
             <div>
@@ -1082,7 +1103,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
             </div>
           </div>
           <Field label="Action Type">
-            <select disabled value="server_command">
+            <select disabled={!isOnline || isActionSending} value={actionType} onChange={(event) => setActionType(event.target.value)}>
               <option value="client_command">Client Command</option>
               <option value="server_command">Server Command</option>
               <option value="text_message">Text Message</option>
@@ -1090,15 +1111,23 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
           </Field>
           <Field label="Message / Command">
             <div className="remote-command-input">
-              <span>/</span>
-              <input disabled placeholder="warp end" />
+              {actionPrefix ? <span>{actionPrefix}</span> : null}
+              <input
+                disabled={!isOnline || isActionSending}
+                placeholder={actionPlaceholder}
+                value={actionDraft}
+                onChange={(event) => setActionDraft(event.target.value)}
+              />
             </div>
           </Field>
-          <p className="remote-hint">Command sending is the next protocol slice. Screenshot refresh and logs are wired now.</p>
-          <button className="btn primary" type="submit" disabled><Send size={15} aria-hidden="true" />Send Action</button>
+          <p className="remote-hint">{isOnline ? 'Commands are sent to this connected instance over the live control socket.' : 'This instance must be connected before actions can be sent.'}</p>
+          <button className="btn primary" type="submit" disabled={!canSendAction}>
+            {isActionSending ? <Loader2 size={15} aria-hidden="true" className="spin-icon" /> : <Send size={15} aria-hidden="true" />}
+            {isActionSending ? 'Sending' : 'Send Action'}
+          </button>
           <div className="remote-examples">
             <span>Examples</span>
-            <p><strong>Client:</strong> .halo</p>
+            <p><strong>Client:</strong> /autoauction</p>
             <p><strong>Server:</strong> /warp end</p>
             <p><strong>Text:</strong> hello there</p>
           </div>
@@ -1267,6 +1296,8 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
               },
             };
           });
+        } else if (data.type === 'live_control_action_sent') {
+          setStatusMessage('Remote action sent');
         } else if (data.type === 'live_control_error') {
           setStatusMessage(data.message || 'Live control request failed');
           if (data.accountId) {
@@ -1669,6 +1700,33 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     }
   }, [clearScreenshotTimeout]);
 
+  const sendLiveAction = useCallback(async (accountId, actionType, content) => {
+    const socket = dashboardSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setStatusMessage('Dashboard live updates are not connected');
+      setLiveControlByAccountId((current) => ({
+        ...current,
+        [accountId]: {
+          ...(current[accountId] || {}),
+          lastError: {
+            code: 'dashboard_socket_closed',
+            message: 'Dashboard live updates are not connected',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      }));
+      return false;
+    }
+    socket.send(JSON.stringify({
+      type: 'send_action',
+      accountId,
+      actionType,
+      content,
+    }));
+    setStatusMessage('Remote action queued');
+    return true;
+  }, []);
+
   useEffect(() => {
     if (!remoteAccount || (remoteAccountStatus !== 'active' && remoteAccountStatus !== 'hypixel')) {
       autoRefreshAccountRef.current = null;
@@ -1776,6 +1834,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
             state={liveControlByAccountId[remoteAccount.id]}
             nowMs={nowMs}
             onRequestScreenshot={requestLiveScreenshot}
+            onSendAction={sendLiveAction}
             onBack={() => navigateView('dashboard')}
           />
         ) : (

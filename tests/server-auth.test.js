@@ -960,6 +960,29 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     ));
     assert.ok(screenshotRequest.requestId);
 
+    const actionPromise = waitForSocketMessageMatching(modSocket, (message) => (
+      message.type === 'remote_action'
+      && message.accountId === authed.account.id
+      && message.actionType === 'client_command'
+    ));
+    const actionAckPromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_action_sent'
+      && message.accountId === authed.account.id
+    ));
+    dashboardSocket.send(JSON.stringify({
+      type: 'send_action',
+      accountId: authed.account.id,
+      actionType: 'client_command',
+      content: '/autoauction',
+    }));
+    const action = await actionPromise;
+    assert.strictEqual(action.content, 'autoauction');
+    assert.ok(action.requestId);
+    assert.ok(action.sentAt);
+    const actionAck = await actionAckPromise;
+    assert.strictEqual(actionAck.actionType, 'client_command');
+    assert.strictEqual(actionAck.requestId, action.requestId);
+
     const liveUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
       message.type === 'live_control_update'
       && message.accountId === authed.account.id

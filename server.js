@@ -654,7 +654,16 @@ function createLiveControlStore() {
   }
 
   function handleDashboardMessage(socket, message, modConnections) {
-    if (message.type !== 'request_screenshot') return;
+    if (message.type === 'request_screenshot') {
+      handleScreenshotRequest(socket, message, modConnections);
+      return;
+    }
+    if (message.type === 'send_action') {
+      handleRemoteAction(socket, message, modConnections);
+    }
+  }
+
+  function handleScreenshotRequest(socket, message, modConnections) {
     const accountId = Number(message.accountId);
     if (!Number.isFinite(accountId) || accountId <= 0) {
       console.warn('Live control screenshot request rejected: invalid account id', message.accountId);
@@ -672,6 +681,48 @@ function createLiveControlStore() {
     if (!sent) {
       sendSocketJson(socket, { type: 'live_control_error', code: 'account_offline', accountId, message: 'Account is not connected' });
     }
+  }
+
+  function handleRemoteAction(socket, message, modConnections) {
+    const accountId = Number(message.accountId);
+    if (!Number.isFinite(accountId) || accountId <= 0) {
+      console.warn('Live control action rejected: invalid account id', message.accountId);
+      sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_account', message: 'accountId is required' });
+      return;
+    }
+    const actionType = cleanRemoteActionType(message.actionType);
+    if (!actionType) {
+      sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_action_type', accountId, message: 'Action type is required' });
+      return;
+    }
+    const content = cleanRemoteActionContent(message.content, actionType);
+    if (!content) {
+      sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_action_content', accountId, message: 'Message or command is required' });
+      return;
+    }
+
+    const sentAt = new Date().toISOString();
+    const requestId = crypto.randomUUID();
+    const sent = modConnections.sendToAccount(accountId, {
+      type: 'remote_action',
+      accountId,
+      requestId,
+      actionType,
+      content,
+      sentAt,
+    });
+    console.info(`Live control action ${requestId} for account ${accountId}: ${sent ? 'sent' : 'offline'} (${actionType})`);
+    if (!sent) {
+      sendSocketJson(socket, { type: 'live_control_error', code: 'account_offline', accountId, message: 'Account is not connected' });
+      return;
+    }
+    sendSocketJson(socket, {
+      type: 'live_control_action_sent',
+      accountId,
+      requestId,
+      actionType,
+      sentAt,
+    });
   }
 
   function handleModMessage(account, message) {
@@ -777,6 +828,21 @@ function createLiveControlStore() {
   function cleanLogSource(source) {
     const value = String(source || 'system').trim().toLowerCase();
     return ['chat', 'system', 'debug', 'status'].includes(value) ? value : 'system';
+  }
+
+  function cleanRemoteActionType(actionType) {
+    const value = String(actionType || '').trim().toLowerCase();
+    return ['client_command', 'server_command', 'text_message'].includes(value) ? value : '';
+  }
+
+  function cleanRemoteActionContent(content, actionType) {
+    let value = stripMinecraftFormatting(String(content || '')).trim().slice(0, 256);
+    if (actionType === 'client_command' || actionType === 'server_command') {
+      while (value.startsWith('/') || value.startsWith('.')) {
+        value = value.slice(1).trimStart();
+      }
+    }
+    return value;
   }
 
   function cleanLogSegments(segments) {
