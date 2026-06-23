@@ -657,6 +657,7 @@ function createLiveControlStore() {
     if (message.type !== 'request_screenshot') return;
     const accountId = Number(message.accountId);
     if (!Number.isFinite(accountId) || accountId <= 0) {
+      console.warn('Live control screenshot request rejected: invalid account id', message.accountId);
       sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_account', message: 'accountId is required' });
       return;
     }
@@ -667,6 +668,7 @@ function createLiveControlStore() {
       requestId,
       sentAt: new Date().toISOString(),
     });
+    console.info(`Live control screenshot request ${requestId} for account ${accountId}: ${sent ? 'sent' : 'offline'}`);
     if (!sent) {
       sendSocketJson(socket, { type: 'live_control_error', code: 'account_offline', accountId, message: 'Account is not connected' });
     }

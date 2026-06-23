@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
+  AlertTriangle,
   Ban,
   Camera,
   ChevronLeft,
@@ -828,6 +829,7 @@ function liveControlStateMap(accounts) {
 function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
   const logs = state?.logs || [];
   const screenshot = state?.screenshot || null;
+  const lastError = state?.lastError || null;
   const displayStatus = displayAccountStatus(account, nowMs);
   const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
   const screenshotAgeMs = screenshot?.capturedAt ? Date.now() - Date.parse(screenshot.capturedAt) : null;
@@ -864,7 +866,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
                 </div>
                 <div className="remote-meta-line">
                   <span><Clock size={14} aria-hidden="true" />Last update {state?.updatedAt ? new Date(state.updatedAt).toLocaleTimeString() : 'Waiting'}</span>
-                  <span>{screenshot ? 'Live screenshot ready' : 'Waiting for first screenshot'}</span>
+                  <span>{lastError?.message || (screenshot ? 'Live screenshot ready' : 'Waiting for first screenshot')}</span>
                 </div>
               </div>
             </div>
@@ -880,6 +882,12 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
           </div>
 
           <div className="remote-screenshot-stage">
+            {lastError ? (
+              <div className="remote-inline-error">
+                <AlertTriangle size={16} aria-hidden="true" />
+                <span>{lastError.message}</span>
+              </div>
+            ) : null}
             {screenshot?.imageBase64 ? (
               <>
                 <img
@@ -1051,6 +1059,19 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
           }));
         } else if (data.type === 'live_control_error') {
           setStatusMessage(data.message || 'Live control request failed');
+          if (data.accountId) {
+            setLiveControlByAccountId((current) => ({
+              ...current,
+              [data.accountId]: {
+                ...(current[data.accountId] || {}),
+                lastError: {
+                  code: data.code || 'live_control_error',
+                  message: data.message || 'Live control request failed',
+                  createdAt: new Date().toISOString(),
+                },
+              },
+            }));
+          }
         }
       } catch (err) {
         console.error('Dashboard websocket message failed:', err);
@@ -1371,8 +1392,26 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     const socket = dashboardSocketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       setStatusMessage('Dashboard live updates are not connected');
+      setLiveControlByAccountId((current) => ({
+        ...current,
+        [accountId]: {
+          ...(current[accountId] || {}),
+          lastError: {
+            code: 'dashboard_socket_closed',
+            message: 'Dashboard live updates are not connected',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      }));
       return;
     }
+    setLiveControlByAccountId((current) => ({
+      ...current,
+      [accountId]: {
+        ...(current[accountId] || {}),
+        lastError: null,
+      },
+    }));
     socket.send(JSON.stringify({ type: 'request_screenshot', accountId }));
     setStatusMessage('Screenshot refresh requested');
   }, []);
