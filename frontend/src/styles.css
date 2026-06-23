@@ -1113,7 +1113,8 @@ tbody tr:hover {
 
 .remote-screenshot-panel {
   display: grid;
-  grid-template-rows: auto minmax(320px, 1fr);
+  grid-template-rows: auto auto;
+  align-self: start;
 }
 
 .remote-instance-head {
@@ -1221,13 +1222,18 @@ tbody tr:hover {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 320px;
+  height: clamp(360px, 48vh, 560px);
+  min-height: 0;
+  max-height: 560px;
+  overflow: hidden;
   background: #05080c;
 }
 
 .remote-screenshot-stage img {
   width: 100%;
   height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   background: #05080c;
   transition: opacity 500ms ease, filter 500ms ease, transform 500ms ease;
@@ -1869,11 +1875,12 @@ tbody tr:hover {
   }
 
   .remote-screenshot-panel {
-    grid-template-rows: auto minmax(320px, 1fr);
+    grid-template-rows: auto auto;
   }
 
   .remote-screenshot-stage {
-    min-height: 320px;
+    height: clamp(300px, 46vh, 420px);
+    max-height: 420px;
   }
 
   .remote-log-line {
