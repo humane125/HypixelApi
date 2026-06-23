@@ -950,7 +950,8 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
   const isScreenshotLoading = Boolean(state?.isScreenshotLoading);
   const displayStatus = displayAccountStatus(account, nowMs);
   const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
-  const screenshotAgeMs = screenshot?.capturedAt ? nowMs - Date.parse(screenshot.capturedAt) : null;
+  const screenshotAgeTimestamp = screenshot?.receivedAt || screenshot?.capturedAt;
+  const screenshotAgeMs = screenshotAgeTimestamp ? nowMs - Date.parse(screenshotAgeTimestamp) : null;
 
   return (
     <section className="remote-page">

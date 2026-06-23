@@ -1024,6 +1024,9 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     }));
     const screenshotUpdate = await screenshotUpdatePromise;
     assert.strictEqual(screenshotUpdate.state.logs.length, 100);
+    assert.strictEqual(screenshotUpdate.state.screenshot.capturedAt, '2026-06-23T12:00:00Z');
+    assert.ok(screenshotUpdate.state.screenshot.receivedAt);
+    assert.notStrictEqual(screenshotUpdate.state.screenshot.receivedAt, screenshotUpdate.state.screenshot.capturedAt);
 
     const statusOkPromise = waitForSocketMessageMatching(modSocket, (message) => (
       message.type === 'status_ok'

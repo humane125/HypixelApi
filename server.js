@@ -708,13 +708,15 @@ function createLiveControlStore() {
     const imageMime = String(message.imageMime || 'image/jpeg').trim();
     const imageBase64 = String(message.imageBase64 || '').trim();
     if (!imageBase64) return;
+    const receivedAt = new Date().toISOString();
     const state = mutableState(account.id);
     state.screenshot = {
       imageMime,
       imageBase64,
-      capturedAt: message.capturedAt || new Date().toISOString(),
+      capturedAt: message.capturedAt || receivedAt,
+      receivedAt,
     };
-    state.updatedAt = new Date().toISOString();
+    state.updatedAt = receivedAt;
     state.clearedAt = null;
     broadcast(account.id);
   }
