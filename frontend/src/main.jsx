@@ -780,6 +780,7 @@ function ProxyConfigModal({ account, draft, onChange, onSave, onClose }) {
 
 function DashboardView() {
   const [me, setMe] = useState(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
   const [accounts, setAccounts] = useState([]);
   const [apiKeys, setApiKeys] = useState([]);
   const [dashboardUsers, setDashboardUsers] = useState([]);
@@ -821,6 +822,8 @@ function DashboardView() {
       setApiKeys([]);
       setDashboardUsers([]);
       setStatusMessage(err.message);
+    } finally {
+      setDashboardLoading(false);
     }
   }, []);
 
@@ -881,6 +884,7 @@ function DashboardView() {
   const login = useCallback(async (event) => {
     event.preventDefault();
     try {
+      setDashboardLoading(true);
       const body = await apiFetch('/api/dashboard/login', null, {
         method: 'POST',
         body: JSON.stringify(loginForm),
@@ -888,9 +892,10 @@ function DashboardView() {
       setMe(body.user);
       setLoginForm({ username: '', password: '' });
       setStatusMessage('Dashboard loaded');
-      loadDashboard();
+      await loadDashboard();
     } catch (err) {
       setStatusMessage(err.message);
+      setDashboardLoading(false);
     }
   }, [loadDashboard, loginForm]);
 
@@ -907,6 +912,7 @@ function DashboardView() {
     setApiKeys([]);
     setDashboardUsers([]);
     setIssuedKey(null);
+    setDashboardLoading(false);
     setStatusMessage('Logged out');
   }, []);
 
@@ -1147,6 +1153,22 @@ function DashboardView() {
   const connectAccount = useCallback((account) => {
     setStatusMessage(`Connect requested for ${account.minecraft_username}. Remote control is not wired yet.`);
   }, []);
+
+  if (dashboardLoading && !me) {
+    return (
+      <>
+        <section className="status-strip">
+          <p className="muted">Checking dashboard session...</p>
+        </section>
+        <section className="login-panel session-check-panel">
+          <div>
+            <h2>Loading Dashboard</h2>
+            <p className="muted">Restoring your signed-in session.</p>
+          </div>
+        </section>
+      </>
+    );
+  }
 
   if (!me) {
     return (

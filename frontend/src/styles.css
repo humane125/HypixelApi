@@ -333,6 +333,11 @@ small {
   box-shadow: var(--shadow);
 }
 
+.session-check-panel {
+  min-height: 150px;
+  align-content: center;
+}
+
 .control-panel {
   padding: 17px;
   background: linear-gradient(180deg, rgba(18, 26, 38, 0.96), rgba(12, 17, 24, 0.98));
