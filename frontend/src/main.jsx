@@ -4,16 +4,21 @@ import {
   Activity,
   Ban,
   Camera,
+  ChevronLeft,
+  Clock,
   Copy,
+  ExternalLink,
+  FileText,
   Gavel,
   KeyRound,
   LayoutDashboard,
   LogOut,
-  MessageSquareText,
+  Monitor,
   Plus,
   RefreshCw,
   RotateCw,
   Search,
+  Send,
   Server,
   Settings,
   ShieldCheck,
@@ -308,16 +313,25 @@ function Field({ label, children, className = '' }) {
 }
 
 function viewFromPath(pathname) {
-  return pathname === '/auctions' ? 'auctions' : 'dashboard';
+  if (pathname === '/auctions') return 'auctions';
+  if (pathname.startsWith('/remote')) return 'remote';
+  return 'dashboard';
+}
+
+function remoteAccountIdFromPath(pathname) {
+  const match = String(pathname || '').match(/^\/remote\/(\d+)/);
+  return match ? Number(match[1]) : null;
 }
 
 function App() {
   const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname));
+  const [remoteAccountId, setRemoteAccountId] = useState(() => remoteAccountIdFromPath(window.location.pathname));
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY) || '');
 
   useEffect(() => {
     const handlePopState = () => {
       setActiveView(viewFromPath(window.location.pathname));
+      setRemoteAccountId(remoteAccountIdFromPath(window.location.pathname));
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -328,12 +342,17 @@ function App() {
     localStorage.setItem(TOKEN_STORAGE_KEY, value.trim());
   }, []);
 
-  const navigateView = useCallback((nextView) => {
-    const nextPath = nextView === 'auctions' ? '/auctions' : '/';
+  const navigateView = useCallback((nextView, accountId = null) => {
+    const nextPath = nextView === 'auctions'
+      ? '/auctions'
+      : nextView === 'remote' && accountId
+        ? `/remote/${accountId}`
+        : '/';
     if (window.location.pathname !== nextPath) {
       window.history.pushState({}, '', nextPath);
     }
     setActiveView(nextView);
+    setRemoteAccountId(nextView === 'remote' ? Number(accountId) : null);
   }, []);
 
   return (
@@ -350,6 +369,9 @@ function App() {
           <nav className="view-tabs" aria-label="Primary views">
             <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => navigateView('dashboard')}><LayoutDashboard size={16} aria-hidden="true" />Dashboard</button>
             <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => navigateView('auctions')}><Gavel size={16} aria-hidden="true" />Auctions</button>
+            {activeView === 'remote' ? (
+              <button className="active" type="button"><Monitor size={16} aria-hidden="true" />Remote</button>
+            ) : null}
           </nav>
           {activeView === 'dashboard' ? (
             <div className="topbar-metrics" aria-label="Dashboard status">
@@ -379,7 +401,9 @@ function App() {
         </div>
       </header>
 
-      {activeView === 'auctions' ? <AuctionView token={token} /> : <DashboardView />}
+      {activeView === 'auctions'
+        ? <AuctionView token={token} />
+        : <DashboardView remoteAccountId={remoteAccountId} navigateView={navigateView} />}
     </main>
   );
 }
@@ -784,65 +808,155 @@ function liveControlStateMap(accounts) {
   return Object.fromEntries((accounts || []).map((entry) => [entry.accountId, entry.state || {}]));
 }
 
-function LiveControlPanel({ account, state, onRequestScreenshot, onClose }) {
+function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
   const logs = state?.logs || [];
   const screenshot = state?.screenshot || null;
+  const displayStatus = displayAccountStatus(account, nowMs);
+  const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
+  const screenshotAgeMs = screenshot?.capturedAt ? Date.now() - Date.parse(screenshot.capturedAt) : null;
   return (
-    <div className="modal">
-      <button className="modal-scrim" type="button" aria-label="Close live control" onClick={onClose} />
-      <section className="proxy-modal live-control-modal" aria-modal="true" role="dialog" aria-labelledby="live-control-title">
-        <div className="modal-head">
-          <div>
-            <span className="modal-eyebrow">Live Control</span>
-            <h3 id="live-control-title">{account.minecraft_username}</h3>
-          </div>
-          <button type="button" aria-label="Close live control" onClick={onClose}>x</button>
+    <section className="remote-page">
+      <div className="remote-page-head">
+        <div>
+          <h2>Remote Control</h2>
+          <p className="muted">Monitor and manage the connected Minecraft instance.</p>
         </div>
+        <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
+          <RefreshCw size={15} aria-hidden="true" />Refresh Status
+        </button>
+      </div>
 
-        <div className="live-control-body">
-          <div className="live-screenshot-card">
-            <div className="live-panel-heading">
-              <span><Camera size={16} aria-hidden="true" />Screenshot</span>
+      <div className="remote-detail-grid">
+        <section className="remote-panel remote-screenshot-panel">
+          <div className="remote-instance-head">
+            <div className="remote-instance-left">
+              <button className="remote-icon-button" type="button" aria-label="Back to dashboard" onClick={onBack}>
+                <ChevronLeft size={20} aria-hidden="true" />
+              </button>
+              <img
+                className="remote-avatar"
+                src={mineatarFaceUrl(account.minecraft_uuid)}
+                alt={`${account.minecraft_username} Minecraft skin face`}
+              />
+              <div className="remote-instance-copy">
+                <div className="remote-title-row">
+                  <h3>{account.minecraft_username}</h3>
+                  <span className={`status-badge live-status-badge ${displayStatus}`}>
+                    <span className="status-word">{isOnline ? 'Connected' : displayStatus}</span>
+                  </span>
+                </div>
+                <div className="remote-meta-line">
+                  <span><Clock size={14} aria-hidden="true" />Last update {state?.updatedAt ? new Date(state.updatedAt).toLocaleTimeString() : 'Waiting'}</span>
+                  <span>{screenshot ? 'Live screenshot ready' : 'Waiting for first screenshot'}</span>
+                </div>
+              </div>
+            </div>
+            <div className="remote-instance-actions">
+              <div>
+                <span>Status</span>
+                <strong className={isOnline ? 'remote-online' : ''}>{isOnline ? 'Connected' : 'Offline'}</strong>
+              </div>
               <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
                 <RefreshCw size={15} aria-hidden="true" />Refresh
               </button>
             </div>
-            <div className="live-screenshot-frame">
-              {screenshot?.imageBase64 ? (
+          </div>
+
+          <div className="remote-screenshot-stage">
+            {screenshot?.imageBase64 ? (
+              <>
                 <img
                   src={`data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`}
                   alt={`${account.minecraft_username} game screenshot`}
                 />
-              ) : (
-                <div className="live-empty-state">No screenshot yet</div>
-              )}
-            </div>
-            <p className="muted live-timestamp">{screenshot?.capturedAt ? `Captured ${screenshot.capturedAt}` : 'Waiting for client capture'}</p>
-          </div>
-
-          <div className="live-log-card">
-            <div className="live-panel-heading">
-              <span><MessageSquareText size={16} aria-hidden="true" />Client Log</span>
-            </div>
-            <div className="live-log-list">
-              {logs.length ? logs.map((entry) => (
-                <div className={`live-log-row ${entry.level || 'info'}`} key={entry.id || `${entry.createdAt}-${entry.message}`}>
-                  <span>{entry.level || 'info'}</span>
-                  <p>{entry.message}</p>
-                  <time>{entry.createdAt}</time>
+                <div className="remote-screenshot-overlay">
+                  <span>{screenshotAgeMs != null && Number.isFinite(screenshotAgeMs) ? `${Math.max(0, Math.round(screenshotAgeMs / 1000))}s ago` : 'Latest'}</span>
                 </div>
-              )) : (
-                <div className="live-empty-state">No client logs yet</div>
-              )}
+                <button className="remote-enlarge-button" type="button" disabled>
+                  <ExternalLink size={16} aria-hidden="true" />Click to enlarge
+                </button>
+              </>
+            ) : (
+              <div className="remote-empty-screenshot">
+                <div><Monitor size={42} aria-hidden="true" /></div>
+                <p>Waiting for the first screenshot from this instance.</p>
+                <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
+                  <Camera size={15} aria-hidden="true" />Request Screenshot
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <form className="remote-panel remote-action-panel" onSubmit={(event) => event.preventDefault()}>
+          <div className="remote-section-title">
+            <div><Send size={18} aria-hidden="true" /></div>
+            <div>
+              <h3>Send Action</h3>
+              <p className="muted">Choose an action type and send it to this connected instance.</p>
             </div>
           </div>
+          <Field label="Action Type">
+            <select disabled value="server_command">
+              <option value="client_command">Client Command</option>
+              <option value="server_command">Server Command</option>
+              <option value="text_message">Text Message</option>
+            </select>
+          </Field>
+          <Field label="Message / Command">
+            <div className="remote-command-input">
+              <span>/</span>
+              <input disabled placeholder="warp end" />
+            </div>
+          </Field>
+          <p className="remote-hint">Command sending is the next protocol slice. Screenshot refresh and logs are wired now.</p>
+          <button className="btn primary" type="submit" disabled><Send size={15} aria-hidden="true" />Send Action</button>
+          <div className="remote-examples">
+            <span>Examples</span>
+            <p><strong>Client:</strong> .halo</p>
+            <p><strong>Server:</strong> /warp end</p>
+            <p><strong>Text:</strong> hello there</p>
+          </div>
+        </form>
+      </div>
+
+      <section className="remote-panel remote-log-panel">
+        <div className="remote-log-head">
+          <div className="remote-section-title">
+            <div><FileText size={18} aria-hidden="true" /></div>
+            <div>
+              <h3>In-game Logs</h3>
+              <p className="muted">Recent chat and system outputs.</p>
+            </div>
+          </div>
+          <span className={`status-badge live-status-badge ${isOnline ? 'active' : 'offline'}`}>
+            <span className="status-word">{isOnline ? 'Live' : 'Offline'}</span>
+          </span>
+        </div>
+        <div className="remote-log-list">
+          {logs.length ? (
+            <div className="remote-log-lines">
+              {logs.map((entry) => (
+                <div className={`remote-log-line ${entry.level || 'info'}`} key={entry.id || `${entry.createdAt}-${entry.message}`}>
+                  <time>{entry.createdAt ? new Date(entry.createdAt).toLocaleTimeString() : '--:--:--'}</time>
+                  <span>[{entry.level || 'info'}]</span>
+                  <p>{entry.message}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="remote-empty-log">
+              <Monitor size={28} aria-hidden="true" />
+              <p>{isOnline ? 'Waiting for the first in-game log line.' : 'This instance is offline. Stored logs will appear here when available.'}</p>
+            </div>
+          )}
         </div>
       </section>
-    </div>
+    </section>
   );
 }
 
-function DashboardView() {
+function DashboardView({ remoteAccountId = null, navigateView }) {
   const [me, setMe] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [accounts, setAccounts] = useState([]);
@@ -857,7 +971,6 @@ function DashboardView() {
   const [roleDrafts, setRoleDrafts] = useState({});
   const [proxyDrafts, setProxyDrafts] = useState({});
   const [activeProxyAccountId, setActiveProxyAccountId] = useState(null);
-  const [activeLiveAccountId, setActiveLiveAccountId] = useState(null);
   const [liveControlByAccountId, setLiveControlByAccountId] = useState({});
   const [nowMs, setNowMs] = useState(Date.now());
   const [activeAccountFolder, setActiveAccountFolder] = useState('all');
@@ -886,7 +999,6 @@ function DashboardView() {
       setAccounts([]);
       setProxyDrafts({});
       setActiveProxyAccountId(null);
-      setActiveLiveAccountId(null);
       setLiveControlByAccountId({});
       setApiKeys([]);
       setDashboardUsers([]);
@@ -991,7 +1103,6 @@ function DashboardView() {
     setAccounts([]);
     setProxyDrafts({});
     setActiveProxyAccountId(null);
-    setActiveLiveAccountId(null);
     setLiveControlByAccountId({});
     setApiKeys([]);
     setDashboardUsers([]);
@@ -1235,9 +1346,9 @@ function DashboardView() {
   }, []);
 
   const connectAccount = useCallback((account) => {
-    setActiveLiveAccountId(account.id);
+    navigateView('remote', account.id);
     setStatusMessage(`Live control opened for ${account.minecraft_username}`);
-  }, []);
+  }, [navigateView]);
 
   const requestLiveScreenshot = useCallback((accountId) => {
     const socket = dashboardSocketRef.current;
@@ -1309,7 +1420,9 @@ function DashboardView() {
     ? activeAccountFolder
     : 'all';
   const activeProxyAccount = accounts.find((account) => account.id === activeProxyAccountId) || null;
-  const activeLiveAccount = accounts.find((account) => account.id === activeLiveAccountId) || null;
+  const remoteAccount = remoteAccountId
+    ? accounts.find((account) => Number(account.id) === Number(remoteAccountId)) || null
+    : null;
   const visibleAccounts = accounts.filter((account) => {
     const inBannedFolder = isAccountInBannedFolder(account, nowMs);
     if (selectedAccountFolder === 'banned') return inBannedFolder;
@@ -1323,6 +1436,37 @@ function DashboardView() {
   const hypixelCount = accounts.filter((account) => displayAccountStatus(account, nowMs) === 'hypixel').length;
   const bannedCount = accounts.filter((account) => isAccountInBannedFolder(account, nowMs)).length;
   const activeKeyCount = apiKeys.filter((key) => !key.revoked_at).length;
+
+  if (remoteAccountId) {
+    return (
+      <>
+        <section className="status-strip">
+          <p className="muted">{me ? `Signed in as ${me.username} (${me.role})` : statusMessage}</p>
+          <div className="inline-actions">
+            <button className="btn secondary" type="button" onClick={loadDashboard}><RefreshCw size={16} aria-hidden="true" />Reload</button>
+            <button className="btn secondary" type="button" onClick={() => navigateView('dashboard')}><ChevronLeft size={16} aria-hidden="true" />Dashboard</button>
+          </div>
+        </section>
+
+        {remoteAccount ? (
+          <RemoteControlPage
+            account={remoteAccount}
+            state={liveControlByAccountId[remoteAccount.id]}
+            nowMs={nowMs}
+            onRequestScreenshot={requestLiveScreenshot}
+            onBack={() => navigateView('dashboard')}
+          />
+        ) : (
+          <section className="results-panel remote-not-found">
+            <Monitor size={34} aria-hidden="true" />
+            <h2>Remote account not found</h2>
+            <p className="muted">This account is not registered in the dashboard or has not finished loading.</p>
+            <button className="btn primary compact" type="button" onClick={() => navigateView('dashboard')}>Back to Dashboard</button>
+          </section>
+        )}
+      </>
+    );
+  }
 
   return (
     <>
@@ -1692,14 +1836,6 @@ function DashboardView() {
         />
       ) : null}
 
-      {activeLiveAccount ? (
-        <LiveControlPanel
-          account={activeLiveAccount}
-          state={liveControlByAccountId[activeLiveAccount.id]}
-          onRequestScreenshot={requestLiveScreenshot}
-          onClose={() => setActiveLiveAccountId(null)}
-        />
-      ) : null}
     </>
   );
 }
