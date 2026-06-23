@@ -1453,7 +1453,7 @@ function DashboardView() {
                           <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}><Activity size={15} aria-hidden="true" />Connect</button>
                         ) : null}
                         {canManageUsers ? (
-                          <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}><Trash2 size={15} aria-hidden="true" />Delete Account</button>
+                          <button className="btn danger compact" type="button" title="Delete account" onClick={() => deleteMinecraftAccount(account)}><Trash2 size={15} aria-hidden="true" />Delete</button>
                         ) : null}
                         {canManageAccounts && displayStatus === 'banned' && !isAccountInBannedFolder(account, nowMs) ? (
                           <button className="btn secondary compact wide-action" type="button" onClick={() => moveMinecraftAccountToBannedFolder(account)}><Ban size={15} aria-hidden="true" />Move to Banned</button>

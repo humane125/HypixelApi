@@ -947,6 +947,9 @@ tbody tr:hover {
 
 .account-action-row .btn {
   width: 100%;
+  gap: 7px;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .wide-action {
