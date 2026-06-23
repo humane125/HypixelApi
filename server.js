@@ -689,9 +689,6 @@ function createLiveControlStore() {
 
   function recordLog(account, message) {
     const source = cleanLogSource(message.source);
-    if (source === 'chat') {
-      return;
-    }
     const state = mutableState(account.id);
     state.logs.unshift({
       id: crypto.randomUUID(),

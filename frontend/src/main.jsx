@@ -943,6 +943,7 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
 
 function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
   const logs = state?.logs || [];
+  const chatLogs = logs.filter((entry) => String(entry.source || '').toLowerCase() === 'chat');
   const autoAuctionLogs = logs.filter((entry) => String(entry.source || 'system').toLowerCase() !== 'chat');
   const screenshot = state?.screenshot || null;
   const lastError = state?.lastError || null;
@@ -1081,6 +1082,15 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
           </div>
         </form>
       </div>
+
+      <RemoteLogPanel
+        title="In-game Logs"
+        description="Recent Minecraft chat lines from this instance."
+        logs={chatLogs}
+        emptyOnlineText="Waiting for the first in-game chat line."
+        emptyOfflineText="This instance is offline. Chat logs clear when the instance closes."
+        isOnline={isOnline}
+      />
 
       <RemoteLogPanel
         title="Auto Auction Logs"

@@ -969,7 +969,7 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       type: 'client_log',
       level: 'info',
       source: 'chat',
-      message: 'This normal chat line should not be stored',
+      message: 'This normal chat line should be stored',
     }));
     modSocket.send(JSON.stringify({
       type: 'client_log',
@@ -982,10 +982,12 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       ],
     }));
     const liveUpdate = await liveUpdatePromise;
-    assert.strictEqual(liveUpdate.state.logs.length, 1);
+    assert.strictEqual(liveUpdate.state.logs.length, 2);
     assert.strictEqual(liveUpdate.state.logs[0].message, 'Handoff complete, new account is LiveControlPlayer');
     assert.strictEqual(liveUpdate.state.logs[0].level, 'info');
     assert.strictEqual(liveUpdate.state.logs[0].source, 'system');
+    assert.strictEqual(liveUpdate.state.logs[1].message, 'This normal chat line should be stored');
+    assert.strictEqual(liveUpdate.state.logs[1].source, 'chat');
     assert.deepStrictEqual(liveUpdate.state.logs[0].segments, [
       { text: 'Handoff  ', color: '#55FF55', bold: true },
       { text: 'complete', color: '#FFFFFF' },
@@ -1003,7 +1005,7 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       capturedAt: '2026-06-23T12:00:00Z',
     }));
     const screenshotUpdate = await screenshotUpdatePromise;
-    assert.strictEqual(screenshotUpdate.state.logs.length, 1);
+    assert.strictEqual(screenshotUpdate.state.logs.length, 2);
 
     const statusOkPromise = waitForSocketMessageMatching(modSocket, (message) => (
       message.type === 'status_ok'
