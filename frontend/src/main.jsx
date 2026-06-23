@@ -950,7 +950,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
   const isScreenshotLoading = Boolean(state?.isScreenshotLoading);
   const displayStatus = displayAccountStatus(account, nowMs);
   const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
-  const screenshotAgeMs = screenshot?.capturedAt ? Date.now() - Date.parse(screenshot.capturedAt) : null;
+  const screenshotAgeMs = screenshot?.capturedAt ? nowMs - Date.parse(screenshot.capturedAt) : null;
 
   return (
     <section className="remote-page">
@@ -1249,13 +1249,13 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   }, []);
 
   useEffect(() => {
-    if (!accounts.some((account) => (
+    if (!remoteAccountKey && !accounts.some((account) => (
       account.status === 'banned'
       && (account.ban_until || account.banned_folder_available_at)
     ))) return undefined;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [accounts]);
+  }, [accounts, remoteAccountKey]);
 
   useEffect(() => {
     const hasExpiredBan = accounts.some((account) => (
@@ -1543,11 +1543,19 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     setStatusMessage(`Live control opened for ${account.minecraft_username}`);
   }, [navigateView]);
 
-  const requestLiveScreenshot = useCallback((accountId) => {
+  const remoteAccount = remoteAccountKey
+    ? accounts.find((account) => accountMatchesRemoteKey(account, remoteAccountKey)) || null
+    : null;
+  const remoteAccountStatus = remoteAccount ? displayAccountStatus(remoteAccount, nowMs) : null;
+
+  const requestLiveScreenshot = useCallback((accountId, options = {}) => {
+    const quiet = Boolean(options.quiet);
     const socket = dashboardSocketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       clearScreenshotTimeout(accountId);
-      setStatusMessage('Dashboard live updates are not connected');
+      if (!quiet) {
+        setStatusMessage('Dashboard live updates are not connected');
+      }
       setLiveControlByAccountId((current) => ({
         ...current,
         [accountId]: {
@@ -1577,7 +1585,9 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
           },
         },
       }));
-      setStatusMessage('Screenshot request timed out');
+      if (!quiet) {
+        setStatusMessage('Screenshot request timed out');
+      }
     }, 15000);
     screenshotTimeoutsRef.current.set(Number(accountId), timer);
     setLiveControlByAccountId((current) => ({
@@ -1589,8 +1599,20 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       },
     }));
     socket.send(JSON.stringify({ type: 'request_screenshot', accountId }));
-    setStatusMessage('Screenshot refresh requested');
+    if (!quiet) {
+      setStatusMessage('Screenshot refresh requested');
+    }
   }, [clearScreenshotTimeout]);
+
+  useEffect(() => {
+    if (!remoteAccount) return undefined;
+    if (remoteAccountStatus !== 'active' && remoteAccountStatus !== 'hypixel') return undefined;
+    requestLiveScreenshot(remoteAccount.id, { quiet: true });
+    const timer = window.setInterval(() => {
+      requestLiveScreenshot(remoteAccount.id, { quiet: true });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [remoteAccount?.id, remoteAccountStatus, requestLiveScreenshot]);
 
   if (dashboardLoading && !me) {
     return (
@@ -1652,9 +1674,6 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     ? activeAccountFolder
     : 'all';
   const activeProxyAccount = accounts.find((account) => account.id === activeProxyAccountId) || null;
-  const remoteAccount = remoteAccountKey
-    ? accounts.find((account) => accountMatchesRemoteKey(account, remoteAccountKey)) || null
-    : null;
   const visibleAccounts = accounts.filter((account) => {
     const inBannedFolder = isAccountInBannedFolder(account, nowMs);
     if (selectedAccountFolder === 'banned') return inBannedFolder;

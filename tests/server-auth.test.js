@@ -993,6 +993,24 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       { text: 'complete', color: '#FFFFFF' },
     ]);
 
+    const cappedUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+      && message.state?.logs?.[0]?.message === 'cap-line-104'
+    ));
+    for (let index = 0; index < 105; index += 1) {
+      modSocket.send(JSON.stringify({
+        type: 'client_log',
+        level: 'info',
+        source: 'chat',
+        message: `cap-line-${index}`,
+      }));
+    }
+    const cappedUpdate = await cappedUpdatePromise;
+    assert.strictEqual(cappedUpdate.state.logs.length, 100);
+    assert.strictEqual(cappedUpdate.state.logs[0].message, 'cap-line-104');
+    assert.strictEqual(cappedUpdate.state.logs[cappedUpdate.state.logs.length - 1].message, 'cap-line-5');
+
     const screenshotUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
       message.type === 'live_control_update'
       && message.accountId === authed.account.id
@@ -1005,7 +1023,7 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       capturedAt: '2026-06-23T12:00:00Z',
     }));
     const screenshotUpdate = await screenshotUpdatePromise;
-    assert.strictEqual(screenshotUpdate.state.logs.length, 2);
+    assert.strictEqual(screenshotUpdate.state.logs.length, 100);
 
     const statusOkPromise = waitForSocketMessageMatching(modSocket, (message) => (
       message.type === 'status_ok'
