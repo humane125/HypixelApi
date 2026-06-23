@@ -1094,6 +1094,13 @@ function DashboardView() {
     if (selectedAccountFolder === 'all') return !inBannedFolder;
     return !inBannedFolder && selectedAccountFolder === `owner:${accountOwnerFolder(account)}`;
   });
+  const connectedCount = accounts.filter((account) => {
+    const status = displayAccountStatus(account, nowMs);
+    return status === 'active' || status === 'hypixel';
+  }).length;
+  const hypixelCount = accounts.filter((account) => displayAccountStatus(account, nowMs) === 'hypixel').length;
+  const bannedCount = accounts.filter((account) => isAccountInBannedFolder(account, nowMs)).length;
+  const activeKeyCount = apiKeys.filter((key) => !key.revoked_at).length;
 
   return (
     <>
@@ -1103,6 +1110,13 @@ function DashboardView() {
           <button className="btn secondary" type="button" onClick={loadDashboard}>Reload</button>
           <button className="btn secondary" type="button" onClick={logout}>Log Out</button>
         </div>
+      </section>
+
+      <section className="stats-row dashboard-summary" aria-label="Dashboard summary">
+        <StatCard title="Connected Clients" value={formatNumber(connectedCount)} detail={`${formatNumber(accounts.length)} registered accounts`} variant="rare" />
+        <StatCard title="Hypixel Active" value={formatNumber(hypixelCount)} detail="Currently on Hypixel" variant="mythic" />
+        <StatCard title="Banned Folder" value={formatNumber(bannedCount)} detail="Held outside active rotation" variant="legendary" />
+        <StatCard title="Active API Keys" value={formatNumber(activeKeyCount)} detail={`${formatNumber(apiKeys.length)} total keys`} variant="recommendation" />
       </section>
 
       <section className="dashboard-grid">
