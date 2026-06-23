@@ -1187,6 +1187,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const [screenshotRefreshNonce, setScreenshotRefreshNonce] = useState(0);
   const dashboardSocketRef = useRef(null);
   const screenshotTimeoutsRef = useRef(new Map());
+  const autoRefreshAccountRef = useRef(null);
 
   const clearScreenshotTimeout = useCallback((accountId) => {
     const timer = screenshotTimeoutsRef.current.get(Number(accountId));
@@ -1669,11 +1670,17 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   }, [clearScreenshotTimeout]);
 
   useEffect(() => {
-    if (!remoteAccount) return undefined;
-    if (remoteAccountStatus !== 'active' && remoteAccountStatus !== 'hypixel') return undefined;
-    requestLiveScreenshot(remoteAccount.id, { quiet: true });
+    if (!remoteAccount || (remoteAccountStatus !== 'active' && remoteAccountStatus !== 'hypixel')) {
+      autoRefreshAccountRef.current = null;
+      return undefined;
+    }
+    const accountId = remoteAccount.id;
+    if (autoRefreshAccountRef.current !== accountId) {
+      autoRefreshAccountRef.current = accountId;
+      requestLiveScreenshot(accountId, { quiet: true });
+    }
     const timer = window.setInterval(() => {
-      requestLiveScreenshot(remoteAccount.id, { quiet: true });
+      requestLiveScreenshot(accountId, { quiet: true });
     }, 30_000);
     return () => window.clearInterval(timer);
   }, [remoteAccount?.id, remoteAccountStatus, requestLiveScreenshot, screenshotRefreshNonce]);

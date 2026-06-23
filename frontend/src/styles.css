@@ -1099,7 +1099,7 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: minmax(0, 1.9fr) minmax(320px, 0.7fr);
   gap: 22px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .remote-panel {
@@ -1113,7 +1113,7 @@ tbody tr:hover {
 
 .remote-screenshot-panel {
   display: grid;
-  grid-template-rows: auto minmax(420px, 1fr);
+  grid-template-rows: auto minmax(320px, 1fr);
 }
 
 .remote-instance-head {
@@ -1221,7 +1221,7 @@ tbody tr:hover {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 420px;
+  min-height: 320px;
   background: #05080c;
 }
 
@@ -1508,7 +1508,6 @@ tbody tr:hover {
   flex-direction: column;
   gap: 16px;
   padding: 22px;
-  align-self: start;
 }
 
 .remote-section-title {
