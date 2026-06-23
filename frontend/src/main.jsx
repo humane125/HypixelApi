@@ -305,13 +305,33 @@ function Field({ label, children, className = '' }) {
   );
 }
 
+function viewFromPath(pathname) {
+  return pathname === '/auctions' ? 'auctions' : 'dashboard';
+}
+
 function App() {
-  const [activeView, setActiveView] = useState('auctions');
+  const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname));
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY) || '');
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveView(viewFromPath(window.location.pathname));
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const updateToken = useCallback((value) => {
     setToken(value);
     localStorage.setItem(TOKEN_STORAGE_KEY, value.trim());
+  }, []);
+
+  const navigateView = useCallback((nextView) => {
+    const nextPath = nextView === 'auctions' ? '/auctions' : '/';
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, '', nextPath);
+    }
+    setActiveView(nextView);
   }, []);
 
   return (
@@ -326,8 +346,8 @@ function App() {
         </div>
         <div className="topbar-actions">
           <nav className="view-tabs" aria-label="Primary views">
-            <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => setActiveView('auctions')}><Gavel size={16} aria-hidden="true" />Auctions</button>
-            <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setActiveView('dashboard')}><LayoutDashboard size={16} aria-hidden="true" />Dashboard</button>
+            <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => navigateView('dashboard')}><LayoutDashboard size={16} aria-hidden="true" />Dashboard</button>
+            <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => navigateView('auctions')}><Gavel size={16} aria-hidden="true" />Auctions</button>
           </nav>
           {activeView === 'dashboard' ? (
             <div className="topbar-metrics" aria-label="Dashboard status">

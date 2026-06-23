@@ -1969,6 +1969,18 @@ function createAppServer(options = {}) {
 
     fs.readFile(filePath, (err, content) => {
       if (err) {
+        if (err.code === 'ENOENT' && req.method === 'GET' && !extname) {
+          fs.readFile(path.join(publicDir, 'index.html'), (indexErr, indexContent) => {
+            if (indexErr) {
+              res.writeHead(500, { 'Content-Type': 'text/html' });
+              res.end(`Server Error: ${indexErr.code}`, 'utf-8');
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(indexContent);
+          });
+          return;
+        }
         res.writeHead(err.code === 'ENOENT' ? 404 : 500, { 'Content-Type': 'text/html' });
         res.end(err.code === 'ENOENT' ? '<h1>404 Not Found</h1>' : `Server Error: ${err.code}`, 'utf-8');
         return;

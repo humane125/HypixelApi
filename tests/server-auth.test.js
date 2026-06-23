@@ -1,4 +1,7 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const WebSocket = require('ws');
 
 const {
@@ -144,6 +147,22 @@ function createTestServerWithOptions(options = {}) {
   });
   return { db, owner, ownerKey, server };
 }
+
+test('static server falls back to index for app routes', async () => {
+  const publicDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hypixel-public-'));
+  fs.writeFileSync(path.join(publicDir, 'index.html'), '<!doctype html><div id="root">Dashboard shell</div>');
+  const { server } = createTestServerWithOptions({ publicDir });
+  const baseUrl = await listen(server);
+  try {
+    const response = await fetch(`${baseUrl}/auctions`);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.headers.get('content-type'), 'text/html');
+    assert.ok((await response.text()).includes('Dashboard shell'));
+  } finally {
+    await close(server);
+    fs.rmSync(publicDir, { recursive: true, force: true });
+  }
+});
 
 test('mod websocket authenticates api keys with mod connect scope and registers account', async () => {
   const db = createDatabase(':memory:');
