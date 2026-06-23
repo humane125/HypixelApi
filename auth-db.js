@@ -420,6 +420,46 @@ function revokeApiKey(db, apiKeyId) {
   db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(nowIso(), apiKeyId);
 }
 
+function rotateApiKey(db, apiKeyId) {
+  const rotate = db.transaction((id) => {
+    const existing = db.prepare(`
+      SELECT
+        api_keys.*,
+        users.username,
+        users.disabled_at,
+        users.password_hash IS NOT NULL AS has_password
+      FROM api_keys
+      JOIN users ON users.id = api_keys.user_id
+      WHERE api_keys.id = ?
+    `).get(id);
+
+    if (!existing) throw new Error('API key not found');
+    if (existing.revoked_at) throw new Error('API key is already revoked');
+    if (existing.disabled_at || !existing.has_password) {
+      throw new Error('Replacement keys can only be assigned to active dashboard users with passwords');
+    }
+
+    db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(nowIso(), existing.id);
+    const apiKey = createApiKey(db, {
+      userId: existing.user_id,
+      name: existing.name,
+      scopes: parseScopes(existing.scopes_json),
+      expiresAt: existing.expires_at,
+    });
+
+    return {
+      revokedApiKeyId: existing.id,
+      user: {
+        id: existing.user_id,
+        username: existing.username,
+      },
+      apiKey,
+    };
+  });
+
+  return rotate(apiKeyId);
+}
+
 function listApiKeys(db) {
   return db.prepare(`
     SELECT
@@ -934,6 +974,7 @@ module.exports = {
   createApiKey,
   authenticateApiKey,
   revokeApiKey,
+  rotateApiKey,
   listApiKeys,
   countActiveApiKeys,
   createMinecraftAccount,

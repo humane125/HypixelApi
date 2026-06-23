@@ -1059,6 +1059,20 @@ function DashboardView() {
     }
   }, [loadDashboard]);
 
+  const replaceKey = useCallback(async (apiKeyId) => {
+    try {
+      const body = await apiFetch('/api/dashboard/api-keys/replace', null, {
+        method: 'POST',
+        body: JSON.stringify({ apiKeyId }),
+      });
+      setIssuedKey(body.apiKey);
+      setStatusMessage('API key replaced. Copy the new key now.');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
   const copyText = useCallback(async (value, label) => {
     const text = String(value || '').trim();
     if (!text) {
@@ -1454,15 +1468,26 @@ function DashboardView() {
                     <td>{key.revoked_at ? <span className="status-badge banned">revoked</span> : <span className="status-badge active">active</span>}</td>
                     <td>
                       <div className="key-actions">
-                        <button
-                          className="btn secondary compact"
-                          type="button"
-                          disabled={!fullKey}
-                          title={fullKey ? 'Copy full API key' : 'Full key is unavailable for this older key'}
-                          onClick={() => copyText(fullKey, 'API key')}
-                        >
-                          {fullKey ? 'Copy Key' : 'No Key'}
-                        </button>
+                        {fullKey ? (
+                          <button
+                            className="btn secondary compact"
+                            type="button"
+                            title="Copy full API key"
+                            onClick={() => copyText(fullKey, 'API key')}
+                          >
+                            Copy Key
+                          </button>
+                        ) : (
+                          <button
+                            className="btn secondary compact"
+                            type="button"
+                            disabled={Boolean(key.revoked_at)}
+                            title="Replace this old unrecoverable key with a new full key"
+                            onClick={() => replaceKey(key.id)}
+                          >
+                            Replace
+                          </button>
+                        )}
                         <button className="btn danger compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
                       </div>
                     </td>

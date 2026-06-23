@@ -1464,6 +1464,41 @@ test('admin can issue a new api key for an existing dashboard user and only the 
   }
 });
 
+test('owner can replace an unrecoverable api key and receive the new raw key', async () => {
+  const { db, server } = createTestServer();
+  const baseUrl = await listen(server);
+  try {
+    const cookie = await loginDashboard(baseUrl);
+    const oldKey = db.prepare('SELECT id FROM api_keys WHERE name = ?').get('owner key');
+    db.prepare('UPDATE api_keys SET raw_key = NULL WHERE id = ?').run(oldKey.id);
+
+    const replaced = await fetch(`${baseUrl}/api/dashboard/api-keys/replace`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({ apiKeyId: oldKey.id }),
+    });
+    assert.strictEqual(replaced.status, 201);
+    const body = await replaced.json();
+    assert.strictEqual(body.revokedApiKeyId, oldKey.id);
+    assert.ok(body.apiKey.rawKey.startsWith('hpx_live_'));
+
+    const denied = await fetch(`${baseUrl}/api/index/status`, {
+      headers: { Authorization: 'Bearer hpx_test_owner_http' },
+    });
+    assert.strictEqual(denied.status, 401);
+
+    const allowed = await fetch(`${baseUrl}/api/index/status`, {
+      headers: { Authorization: `Bearer ${body.apiKey.rawKey}` },
+    });
+    assert.strictEqual(allowed.status, 200);
+  } finally {
+    await close(server);
+  }
+});
+
 test('admin cannot issue api key for arbitrary typed username', async () => {
   const { server } = createTestServer();
   const baseUrl = await listen(server);
