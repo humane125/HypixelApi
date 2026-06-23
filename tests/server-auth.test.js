@@ -963,6 +963,7 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     modSocket.send(JSON.stringify({
       type: 'client_log',
       level: 'info',
+      source: 'chat',
       message: 'Handoff complete, new account is LiveControlPlayer',
     }));
     const liveUpdate = await waitForSocketMessageMatching(dashboardSocket, (message) => (
@@ -971,6 +972,7 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     ));
     assert.strictEqual(liveUpdate.state.logs[0].message, 'Handoff complete, new account is LiveControlPlayer');
     assert.strictEqual(liveUpdate.state.logs[0].level, 'info');
+    assert.strictEqual(liveUpdate.state.logs[0].source, 'chat');
   } finally {
     closeSocketSilently(dashboardSocket);
     closeSocketSilently(modSocket);

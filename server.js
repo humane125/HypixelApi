@@ -692,6 +692,7 @@ function createLiveControlStore() {
     state.logs.unshift({
       id: crypto.randomUUID(),
       level: cleanLevel(message.level),
+      source: cleanLogSource(message.source),
       message: stripMinecraftFormatting(message.message),
       createdAt: new Date().toISOString(),
     });
@@ -754,6 +755,11 @@ function createLiveControlStore() {
   function cleanLevel(level) {
     const value = String(level || 'info').trim().toLowerCase();
     return ['debug', 'info', 'warn', 'error'].includes(value) ? value : 'info';
+  }
+
+  function cleanLogSource(source) {
+    const value = String(source || 'system').trim().toLowerCase();
+    return ['chat', 'system', 'debug', 'status'].includes(value) ? value : 'system';
   }
 
   function stripMinecraftFormatting(value) {

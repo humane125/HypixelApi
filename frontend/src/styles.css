@@ -1537,6 +1537,18 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
+.remote-log-source.source-chat {
+  color: #6ee7b7;
+}
+
+.remote-log-source.source-debug {
+  color: #c4b5fd;
+}
+
+.remote-log-source.source-status {
+  color: #facc15;
+}
+
 .remote-log-level {
   color: rgba(255, 255, 255, 0.62);
   text-transform: uppercase;

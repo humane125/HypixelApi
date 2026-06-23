@@ -827,15 +827,16 @@ function liveControlStateMap(accounts) {
   return Object.fromEntries((accounts || []).map((entry) => [entry.accountId, entry.state || {}]));
 }
 
-function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
-  const logs = state?.logs || [];
-  const logLines = [...logs].reverse();
-  const screenshot = state?.screenshot || null;
-  const lastError = state?.lastError || null;
-  const isScreenshotLoading = Boolean(state?.isScreenshotLoading);
-  const displayStatus = displayAccountStatus(account, nowMs);
-  const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
-  const screenshotAgeMs = screenshot?.capturedAt ? Date.now() - Date.parse(screenshot.capturedAt) : null;
+function remoteLogSourceLabel(source) {
+  const normalized = String(source || 'system').trim().toLowerCase();
+  if (normalized === 'chat') return 'Chat';
+  if (normalized === 'debug') return 'Debug';
+  if (normalized === 'status') return 'Status';
+  return 'System';
+}
+
+function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflineText, isOnline }) {
+  const logLines = [...(logs || [])].reverse();
   const logScrollRef = useRef(null);
   const [isLogsFollowing, setIsLogsFollowing] = useState(true);
 
@@ -846,7 +847,79 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
         logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
       }
     });
-  }, [logLines.length, isLogsFollowing, account.id]);
+  }, [logLines.length, isLogsFollowing, title]);
+
+  return (
+    <section className="remote-panel remote-log-panel">
+      <div className="remote-log-head">
+        <div className="remote-section-title">
+          <div><FileText size={18} aria-hidden="true" /></div>
+          <div>
+            <h3>{title}</h3>
+            <p className="muted">{description}</p>
+          </div>
+        </div>
+        <div className="remote-log-actions">
+          <span className={`status-badge live-status-badge ${isOnline ? 'active' : 'offline'}`}>
+            <span className="status-word">{isOnline ? 'Live' : 'Offline'}</span>
+          </span>
+          <button
+            className="btn secondary compact remote-follow-button"
+            type="button"
+            onClick={() => {
+              setIsLogsFollowing(true);
+              if (logScrollRef.current) {
+                logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
+              }
+            }}
+          >
+            <RefreshCw size={14} aria-hidden="true" />
+            {isLogsFollowing ? 'Following' : 'Focus Latest'}
+          </button>
+        </div>
+      </div>
+      <div
+        className="remote-log-list"
+        ref={logScrollRef}
+        onScroll={() => {
+          const element = logScrollRef.current;
+          if (!element) return;
+          const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+          setIsLogsFollowing(distanceFromBottom <= 48);
+        }}
+      >
+        {logLines.length ? (
+          <div className="remote-log-lines">
+            {logLines.map((entry) => (
+              <div className={`remote-log-line ${entry.level || 'info'}`} key={entry.id || `${entry.createdAt}-${entry.message}`}>
+                <time>{entry.createdAt ? new Date(entry.createdAt).toLocaleTimeString() : '--:--:--'}</time>
+                <span className={`remote-log-source source-${entry.source || 'system'}`}>[{remoteLogSourceLabel(entry.source)}]</span>
+                <span className="remote-log-level">[{entry.level || 'info'}]</span>
+                <p>{entry.message}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="remote-empty-log">
+            <Monitor size={28} aria-hidden="true" />
+            <p>{isOnline ? emptyOnlineText : emptyOfflineText}</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
+  const logs = state?.logs || [];
+  const chatLogs = logs.filter((entry) => String(entry.source || '').toLowerCase() === 'chat');
+  const autoAuctionLogs = logs.filter((entry) => String(entry.source || 'system').toLowerCase() !== 'chat');
+  const screenshot = state?.screenshot || null;
+  const lastError = state?.lastError || null;
+  const isScreenshotLoading = Boolean(state?.isScreenshotLoading);
+  const displayStatus = displayAccountStatus(account, nowMs);
+  const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
+  const screenshotAgeMs = screenshot?.capturedAt ? Date.now() - Date.parse(screenshot.capturedAt) : null;
 
   return (
     <section className="remote-page">
@@ -979,63 +1052,23 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
         </form>
       </div>
 
-      <section className="remote-panel remote-log-panel">
-        <div className="remote-log-head">
-          <div className="remote-section-title">
-            <div><FileText size={18} aria-hidden="true" /></div>
-            <div>
-              <h3>In-game Logs</h3>
-              <p className="muted">Recent chat and system outputs.</p>
-            </div>
-          </div>
-          <div className="remote-log-actions">
-            <span className={`status-badge live-status-badge ${isOnline ? 'active' : 'offline'}`}>
-              <span className="status-word">{isOnline ? 'Live' : 'Offline'}</span>
-            </span>
-            <button
-              className="btn secondary compact remote-follow-button"
-              type="button"
-              onClick={() => {
-                setIsLogsFollowing(true);
-                if (logScrollRef.current) {
-                  logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
-                }
-              }}
-            >
-              <RefreshCw size={14} aria-hidden="true" />
-              {isLogsFollowing ? 'Following' : 'Focus Latest'}
-            </button>
-          </div>
-        </div>
-        <div
-          className="remote-log-list"
-          ref={logScrollRef}
-          onScroll={() => {
-            const element = logScrollRef.current;
-            if (!element) return;
-            const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-            setIsLogsFollowing(distanceFromBottom <= 48);
-          }}
-        >
-          {logLines.length ? (
-            <div className="remote-log-lines">
-              {logLines.map((entry) => (
-                <div className={`remote-log-line ${entry.level || 'info'}`} key={entry.id || `${entry.createdAt}-${entry.message}`}>
-                  <time>{entry.createdAt ? new Date(entry.createdAt).toLocaleTimeString() : '--:--:--'}</time>
-                  <span className="remote-log-source">[System]</span>
-                  <span className="remote-log-level">[{entry.level || 'info'}]</span>
-                  <p>{entry.message}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="remote-empty-log">
-              <Monitor size={28} aria-hidden="true" />
-              <p>{isOnline ? 'Waiting for the first in-game log line.' : 'This instance is offline. Stored logs will appear here when available.'}</p>
-            </div>
-          )}
-        </div>
-      </section>
+      <RemoteLogPanel
+        title="In-game Logs"
+        description="Recent Minecraft chat lines from this instance."
+        logs={chatLogs}
+        emptyOnlineText="Waiting for the first in-game chat line."
+        emptyOfflineText="This instance is offline. Stored chat lines will appear here when available."
+        isOnline={isOnline}
+      />
+
+      <RemoteLogPanel
+        title="Auto Auction Logs"
+        description="Recent AutoAuction workflow and system outputs."
+        logs={autoAuctionLogs}
+        emptyOnlineText="Waiting for the first AutoAuction log line."
+        emptyOfflineText="This instance is offline. Stored AutoAuction logs will appear here when available."
+        isOnline={isOnline}
+      />
     </section>
   );
 }
