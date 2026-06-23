@@ -965,6 +965,10 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       level: 'info',
       source: 'chat',
       message: 'Handoff complete, new account is LiveControlPlayer',
+      segments: [
+        { text: 'Handoff  ', color: '#55ff55', bold: true },
+        { text: 'complete', color: '#FFFFFF' },
+      ],
     }));
     const liveUpdate = await waitForSocketMessageMatching(dashboardSocket, (message) => (
       message.type === 'live_control_update'
@@ -973,6 +977,10 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     assert.strictEqual(liveUpdate.state.logs[0].message, 'Handoff complete, new account is LiveControlPlayer');
     assert.strictEqual(liveUpdate.state.logs[0].level, 'info');
     assert.strictEqual(liveUpdate.state.logs[0].source, 'chat');
+    assert.deepStrictEqual(liveUpdate.state.logs[0].segments, [
+      { text: 'Handoff  ', color: '#55FF55', bold: true },
+      { text: 'complete', color: '#FFFFFF' },
+    ]);
   } finally {
     closeSocketSilently(dashboardSocket);
     closeSocketSilently(modSocket);

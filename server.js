@@ -694,6 +694,7 @@ function createLiveControlStore() {
       level: cleanLevel(message.level),
       source: cleanLogSource(message.source),
       message: stripMinecraftFormatting(message.message),
+      segments: cleanLogSegments(message.segments),
       createdAt: new Date().toISOString(),
     });
     state.logs = state.logs.slice(0, MAX_LOGS);
@@ -762,8 +763,44 @@ function createLiveControlStore() {
     return ['chat', 'system', 'debug', 'status'].includes(value) ? value : 'system';
   }
 
+  function cleanLogSegments(segments) {
+    if (!Array.isArray(segments)) return [];
+    const output = [];
+    let totalCharacters = 0;
+    for (const segment of segments) {
+      if (!segment || typeof segment !== 'object') continue;
+      let text = stripMinecraftFormattingPreserveSpacing(segment.text).slice(0, 300);
+      if (text.length === 0) continue;
+      const remainingCharacters = 1200 - totalCharacters;
+      if (remainingCharacters <= 0) break;
+      if (text.length > remainingCharacters) {
+        text = text.slice(0, remainingCharacters);
+      }
+      totalCharacters += text.length;
+      const cleanSegment = { text };
+      const color = cleanHexColor(segment.color);
+      if (color) cleanSegment.color = color;
+      if (segment.bold === true) cleanSegment.bold = true;
+      if (segment.italic === true) cleanSegment.italic = true;
+      if (segment.underline === true) cleanSegment.underline = true;
+      if (segment.strikethrough === true) cleanSegment.strikethrough = true;
+      output.push(cleanSegment);
+      if (output.length >= 80) break;
+    }
+    return output;
+  }
+
+  function cleanHexColor(color) {
+    const value = String(color || '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(value) ? value.toUpperCase() : null;
+  }
+
   function stripMinecraftFormatting(value) {
     return String(value || '').replace(/(?:\u00a7|&)[0-9a-fk-or]/gi, '').trim();
+  }
+
+  function stripMinecraftFormattingPreserveSpacing(value) {
+    return String(value || '').replace(/(?:\u00a7|&)[0-9a-fk-or]/gi, '');
   }
 
   return { attachDashboard, handleModMessage };

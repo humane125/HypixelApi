@@ -1505,7 +1505,7 @@ tbody tr:hover {
 .remote-log-lines {
   display: grid;
   gap: 0;
-  padding: 8px 12px;
+  padding: 7px 10px;
   border: 1px solid rgba(255, 255, 255, 0.04);
   border-radius: 16px;
   background: rgba(0, 0, 0, 0.2);
@@ -1514,14 +1514,14 @@ tbody tr:hover {
 
 .remote-log-line {
   display: grid;
-  grid-template-columns: 74px 64px 58px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: max-content max-content max-content minmax(0, 1fr);
+  gap: 7px;
   align-items: start;
-  padding: 3px 0;
+  padding: 1px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.035);
   color: rgba(255, 255, 255, 0.72);
   font-size: 0.72rem;
-  line-height: 1.45;
+  line-height: 1.28;
 }
 
 .remote-log-line:last-child {
@@ -1570,6 +1570,11 @@ tbody tr:hover {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.remote-log-segment {
+  white-space: pre-wrap;
 }
 
 .tooltip-head {

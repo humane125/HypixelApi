@@ -835,6 +835,18 @@ function remoteLogSourceLabel(source) {
   return 'System';
 }
 
+function remoteLogSegmentStyle(segment) {
+  const style = {};
+  if (segment?.color) style.color = segment.color;
+  if (segment?.bold) style.fontWeight = 800;
+  if (segment?.italic) style.fontStyle = 'italic';
+  const decorations = [];
+  if (segment?.underline) decorations.push('underline');
+  if (segment?.strikethrough) decorations.push('line-through');
+  if (decorations.length) style.textDecoration = decorations.join(' ');
+  return style;
+}
+
 function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflineText, isOnline }) {
   const logLines = [...(logs || [])].reverse();
   const logScrollRef = useRef(null);
@@ -895,7 +907,19 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
                 <time>{entry.createdAt ? new Date(entry.createdAt).toLocaleTimeString() : '--:--:--'}</time>
                 <span className={`remote-log-source source-${entry.source || 'system'}`}>[{remoteLogSourceLabel(entry.source)}]</span>
                 <span className="remote-log-level">[{entry.level || 'info'}]</span>
-                <p>{entry.message}</p>
+                <p>
+                  {Array.isArray(entry.segments) && entry.segments.length ? (
+                    entry.segments.map((segment, index) => (
+                      <span
+                        className="remote-log-segment"
+                        key={`${entry.id || entry.createdAt}:${index}`}
+                        style={remoteLogSegmentStyle(segment)}
+                      >
+                        {segment.text}
+                      </span>
+                    ))
+                  ) : entry.message}
+                </p>
               </div>
             ))}
           </div>
