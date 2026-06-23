@@ -27,6 +27,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
 import './styles.css';
 
@@ -942,6 +943,7 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
 }
 
 function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
+  const [isScreenshotExpanded, setIsScreenshotExpanded] = useState(false);
   const logs = state?.logs || [];
   const chatLogs = logs.filter((entry) => String(entry.source || '').toLowerCase() === 'chat');
   const autoAuctionLogs = logs.filter((entry) => String(entry.source || 'system').toLowerCase() !== 'chat');
@@ -952,6 +954,20 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
   const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
   const screenshotAgeTimestamp = screenshot?.receivedAt || screenshot?.capturedAt;
   const screenshotAgeMs = screenshotAgeTimestamp ? nowMs - Date.parse(screenshotAgeTimestamp) : null;
+  const screenshotDataUrl = screenshot?.imageBase64
+    ? `data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`
+    : null;
+
+  useEffect(() => {
+    if (!isScreenshotExpanded) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsScreenshotExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isScreenshotExpanded]);
 
   return (
     <section className="remote-page">
@@ -1010,11 +1026,11 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
                 <span>{lastError.message}</span>
               </div>
             ) : null}
-            {screenshot?.imageBase64 ? (
+            {screenshotDataUrl ? (
               <>
                 <img
                   className={isScreenshotLoading ? 'is-loading' : ''}
-                  src={`data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`}
+                  src={screenshotDataUrl}
                   alt={`${account.minecraft_username} game screenshot`}
                 />
                 {isScreenshotLoading ? (
@@ -1028,13 +1044,15 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
                 <div className="remote-screenshot-overlay">
                   <span>{screenshotAgeMs != null && Number.isFinite(screenshotAgeMs) ? `${Math.max(0, Math.round(screenshotAgeMs / 1000))}s ago` : 'Latest'}</span>
                 </div>
-                <button className="remote-enlarge-button" type="button" disabled>
+                <button className="remote-enlarge-button" type="button" onClick={() => setIsScreenshotExpanded(true)}>
                   <ExternalLink size={16} aria-hidden="true" />Click to enlarge
                 </button>
               </>
             ) : (
-              <div className="remote-empty-screenshot">
-                <div><Monitor size={42} aria-hidden="true" /></div>
+              <div className={`remote-empty-screenshot ${isScreenshotLoading ? 'is-loading' : ''}`}>
+                {!isScreenshotLoading ? (
+                  <div className="remote-empty-screenshot-icon"><Monitor size={42} aria-hidden="true" /></div>
+                ) : null}
                 {isScreenshotLoading ? (
                   <div className="remote-loading-inline" aria-live="polite">
                     <div className="remote-loading-dot" />
@@ -1101,6 +1119,46 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
         emptyOfflineText="This instance is offline. Stored AutoAuction logs will appear here when available."
         isOnline={isOnline}
       />
+
+      {isScreenshotExpanded && screenshotDataUrl ? (
+        <div className="remote-lightbox" role="dialog" aria-modal="true" aria-label="Screenshot preview" onClick={() => setIsScreenshotExpanded(false)}>
+          <div className="remote-lightbox-shell" onClick={(event) => event.stopPropagation()}>
+            <div className="remote-lightbox-head">
+              <div>
+                <p>Screenshot preview</p>
+                <h3>{account.minecraft_username}</h3>
+              </div>
+              <div className="remote-lightbox-actions">
+                <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)} disabled={isScreenshotLoading}>
+                  {isScreenshotLoading ? <Loader2 size={15} aria-hidden="true" className="spin-icon" /> : <RefreshCw size={15} aria-hidden="true" />}
+                  {isScreenshotLoading ? 'Refreshing' : 'Refresh screenshot'}
+                </button>
+                <button className="remote-lightbox-close" type="button" onClick={() => setIsScreenshotExpanded(false)} aria-label="Close screenshot preview">
+                  <X size={20} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div className="remote-lightbox-stage">
+              <img
+                className={isScreenshotLoading ? 'is-loading' : ''}
+                src={screenshotDataUrl}
+                alt={`${account.minecraft_username} expanded game screenshot`}
+              />
+              {isScreenshotLoading ? (
+                <div className="remote-loading-overlay" aria-live="polite" aria-label="Refreshing screenshot">
+                  <div className="remote-loading-dot" />
+                  <div className="remote-loading-ring">
+                    <Loader2 size={38} aria-hidden="true" className="spin-icon" />
+                  </div>
+                </div>
+              ) : null}
+              <div className="remote-screenshot-overlay">
+                <span>{screenshotAgeMs != null && Number.isFinite(screenshotAgeMs) ? `${Math.max(0, Math.round(screenshotAgeMs / 1000))}s ago` : 'Latest'}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
