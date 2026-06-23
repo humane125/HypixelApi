@@ -1442,22 +1442,33 @@ function DashboardView() {
               </tr>
             </thead>
             <tbody>
-              {apiKeys.length ? apiKeys.map((key) => (
-                <tr key={key.id}>
-                  <td>{key.name}</td>
-                  <td>{key.username}</td>
-                  <td><code>{key.key_prefix}</code></td>
-                  <td>{key.scopes.join(', ')}</td>
-                  <td>{key.last_used_at || 'Never'}</td>
-                  <td>{key.revoked_at ? <span className="status-badge banned">revoked</span> : <span className="status-badge active">active</span>}</td>
-                  <td>
-                    <div className="key-actions">
-                      <button className="btn secondary compact" type="button" onClick={() => copyText(key.key_prefix, 'API key prefix')}>Copy</button>
-                      <button className="btn danger compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
-                    </div>
-                  </td>
-                </tr>
-              )) : <tr><td className="empty-cell" colSpan="7">No API keys found</td></tr>}
+              {apiKeys.length ? apiKeys.map((key) => {
+                const fullKey = key.raw_key || key.rawKey || '';
+                return (
+                  <tr key={key.id}>
+                    <td>{key.name}</td>
+                    <td>{key.username}</td>
+                    <td><code>{key.key_prefix}</code></td>
+                    <td>{key.scopes.join(', ')}</td>
+                    <td>{key.last_used_at || 'Never'}</td>
+                    <td>{key.revoked_at ? <span className="status-badge banned">revoked</span> : <span className="status-badge active">active</span>}</td>
+                    <td>
+                      <div className="key-actions">
+                        <button
+                          className="btn secondary compact"
+                          type="button"
+                          disabled={!fullKey}
+                          title={fullKey ? 'Copy full API key' : 'Full key is unavailable for this older key'}
+                          onClick={() => copyText(fullKey, 'API key')}
+                        >
+                          {fullKey ? 'Copy Key' : 'No Key'}
+                        </button>
+                        <button className="btn danger compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }) : <tr><td className="empty-cell" colSpan="7">No API keys found</td></tr>}
             </tbody>
           </table>
         </div>

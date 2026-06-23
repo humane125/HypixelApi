@@ -72,6 +72,7 @@ function migrateDatabase(db) {
       name TEXT NOT NULL,
       key_hash TEXT NOT NULL UNIQUE,
       key_prefix TEXT NOT NULL,
+      raw_key TEXT,
       scopes_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
       last_used_at TEXT,
@@ -139,6 +140,11 @@ function migrateDatabase(db) {
   const userColumns = db.prepare('PRAGMA table_info(users)').all().map((column) => column.name);
   if (!userColumns.includes('password_hash')) {
     db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+  }
+
+  const apiKeyColumns = db.prepare('PRAGMA table_info(api_keys)').all().map((column) => column.name);
+  if (!apiKeyColumns.includes('raw_key')) {
+    db.exec('ALTER TABLE api_keys ADD COLUMN raw_key TEXT');
   }
 
   const accountColumns = db.prepare('PRAGMA table_info(minecraft_accounts)').all().map((column) => column.name);
@@ -345,13 +351,14 @@ function createApiKey(db, {
   const key = rawKey || `hpx_live_${crypto.randomBytes(24).toString('base64url')}`;
   const prefix = key.slice(0, API_KEY_PREFIX_LENGTH);
   const result = db.prepare(`
-    INSERT INTO api_keys (user_id, name, key_hash, key_prefix, scopes_json, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO api_keys (user_id, name, key_hash, key_prefix, raw_key, scopes_json, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     userId,
     cleanName,
     hashApiKey(key),
     prefix,
+    key,
     JSON.stringify(scopes),
     nowIso(),
     expiresAt
@@ -421,6 +428,7 @@ function listApiKeys(db) {
       users.username,
       api_keys.name,
       api_keys.key_prefix,
+      api_keys.raw_key,
       api_keys.scopes_json,
       api_keys.created_at,
       api_keys.last_used_at,

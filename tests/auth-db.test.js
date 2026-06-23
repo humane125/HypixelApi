@@ -6,6 +6,7 @@ const {
   createApiKey,
   authenticateApiKey,
   revokeApiKey,
+  listApiKeys,
   createMinecraftAccount,
   listMinecraftAccounts,
   recordMinecraftAccountConnectionStatus,
@@ -47,9 +48,13 @@ test('api keys are stored hashed and authenticate with scopes', () => {
   assert.strictEqual(issued.rawKey, 'hpx_test_owner_secret');
   assert.strictEqual(issued.prefix, 'hpx_test_ow');
 
-  const stored = db.prepare('SELECT key_hash, key_prefix FROM api_keys WHERE id = ?').get(issued.id);
+  const stored = db.prepare('SELECT key_hash, key_prefix, raw_key FROM api_keys WHERE id = ?').get(issued.id);
   assert.notStrictEqual(stored.key_hash, 'hpx_test_owner_secret');
   assert.strictEqual(stored.key_prefix, 'hpx_test_ow');
+  assert.strictEqual(stored.raw_key, 'hpx_test_owner_secret');
+
+  const listed = listApiKeys(db);
+  assert.strictEqual(listed[0].raw_key, 'hpx_test_owner_secret');
 
   const auth = authenticateApiKey(db, 'hpx_test_owner_secret');
   assert.strictEqual(auth.user.username, 'owner');

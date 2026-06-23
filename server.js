@@ -370,7 +370,10 @@ function ensureBootstrapApiKey(db, rawKey) {
   if (!db || !rawKey) return;
   const user = createUser(db, { username: 'owner', role: 'owner' });
   const existing = authenticateApiKey(db, rawKey);
-  if (existing) return;
+  if (existing) {
+    db.prepare('UPDATE api_keys SET raw_key = COALESCE(raw_key, ?) WHERE id = ?').run(rawKey, existing.apiKey.id);
+    return;
+  }
 
   try {
     createApiKey(db, {
