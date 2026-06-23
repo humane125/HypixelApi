@@ -1059,6 +1059,20 @@ function DashboardView() {
     }
   }, [loadDashboard]);
 
+  const copyText = useCallback(async (value, label) => {
+    const text = String(value || '').trim();
+    if (!text) {
+      setStatusMessage(`No ${label} to copy`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatusMessage(`${label} copied`);
+    } catch (err) {
+      setStatusMessage(`Could not copy ${label}: ${err.message}`);
+    }
+  }, []);
+
   const connectAccount = useCallback((account) => {
     setStatusMessage(`Connect requested for ${account.minecraft_username}. Remote control is not wired yet.`);
   }, []);
@@ -1217,7 +1231,10 @@ function DashboardView() {
           {issuedKey ? (
             <div className="issued-key">
               <span>New key</span>
-              <code>{issuedKey.rawKey}</code>
+              <div className="issued-key-row">
+                <code>{issuedKey.rawKey}</code>
+                <button className="btn secondary compact" type="button" onClick={() => copyText(issuedKey.rawKey, 'API key')}>Copy</button>
+              </div>
             </div>
           ) : null}
         </div>
@@ -1434,7 +1451,10 @@ function DashboardView() {
                   <td>{key.last_used_at || 'Never'}</td>
                   <td>{key.revoked_at ? <span className="status-badge banned">revoked</span> : <span className="status-badge active">active</span>}</td>
                   <td>
-                    <button className="btn secondary compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
+                    <div className="key-actions">
+                      <button className="btn secondary compact" type="button" onClick={() => copyText(key.key_prefix, 'API key prefix')}>Copy</button>
+                      <button className="btn danger compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
+                    </div>
                   </td>
                 </tr>
               )) : <tr><td className="empty-cell" colSpan="7">No API keys found</td></tr>}

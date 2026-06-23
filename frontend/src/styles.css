@@ -459,9 +459,10 @@ textarea:focus {
 
 .dashboard-workspace {
   display: grid;
-  grid-template-columns: minmax(330px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
   gap: 22px;
   align-items: start;
+  min-width: 0;
 }
 
 .dashboard-sidebar {
@@ -476,6 +477,7 @@ textarea:focus {
   grid-template-columns: 1fr;
   gap: 20px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .account-panel {
@@ -495,14 +497,56 @@ textarea:focus {
 
 .dashboard-users-panel table,
 .api-keys-panel table {
-  min-width: 980px;
+  min-width: 0;
 }
 
 .dashboard-users-panel th,
 .dashboard-users-panel td,
 .api-keys-panel th,
 .api-keys-panel td {
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.dashboard-users-panel .table-wrap,
+.api-keys-panel .table-wrap {
+  overflow-x: hidden;
+}
+
+.dashboard-users-panel th:nth-child(3),
+.dashboard-users-panel td:nth-child(3),
+.dashboard-users-panel th:nth-child(4),
+.dashboard-users-panel td:nth-child(4),
+.dashboard-users-panel th:nth-child(6),
+.dashboard-users-panel td:nth-child(6),
+.api-keys-panel th:nth-child(2),
+.api-keys-panel td:nth-child(2),
+.api-keys-panel th:nth-child(6),
+.api-keys-panel td:nth-child(6) {
+  display: none;
+}
+
+.api-keys-panel th:nth-child(4),
+.api-keys-panel td:nth-child(4) {
+  max-width: 420px;
+}
+
+.api-keys-panel td:nth-child(4) {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.key-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 154px;
+}
+
+.key-actions .btn {
+  min-height: 32px;
+  padding: 7px 9px;
 }
 
 .stack-form {
@@ -558,6 +602,13 @@ textarea:focus {
   font-size: 0.74rem;
 }
 
+.issued-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 code {
   color: var(--accent);
   overflow-wrap: anywhere;
@@ -566,6 +617,7 @@ code {
 .results-panel {
   padding: 22px;
   background: linear-gradient(180deg, rgba(18, 26, 38, 0.96), rgba(12, 17, 24, 0.98));
+  min-width: 0;
 }
 
 .section-heading {
@@ -596,6 +648,7 @@ code {
 
 .table-wrap {
   overflow-x: auto;
+  max-width: 100%;
   border: 1px solid rgba(98, 119, 145, 0.18);
   border-radius: 8px;
   background: rgba(5, 8, 12, 0.35);
@@ -722,8 +775,9 @@ tbody tr:hover {
 
 .account-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(315px, 330px));
   gap: 18px;
+  align-items: start;
 }
 
 .account-card {
