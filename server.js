@@ -628,6 +628,139 @@ function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
   return { attach, broadcast, setLiveAccountStatusProvider };
 }
 
+function createLiveControlStore() {
+  const dashboardClients = new Set();
+  const accountStates = new Map();
+  const MAX_LOGS = 100;
+
+  function attachDashboard(socket, modConnections) {
+    dashboardClients.add(socket);
+    socket.on('close', () => dashboardClients.delete(socket));
+    socket.on('error', () => dashboardClients.delete(socket));
+    socket.on('message', (rawMessage) => {
+      let message;
+      try {
+        message = JSON.parse(rawMessage.toString());
+      } catch (err) {
+        sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_json', message: 'Invalid JSON message' });
+        return;
+      }
+      handleDashboardMessage(socket, message, modConnections);
+    });
+    setImmediate(() => sendSocketJson(socket, {
+      type: 'live_control_snapshot',
+      accounts: [...accountStates.entries()].map(([accountId, state]) => ({ accountId, state })),
+    }));
+  }
+
+  function handleDashboardMessage(socket, message, modConnections) {
+    if (message.type !== 'request_screenshot') return;
+    const accountId = Number(message.accountId);
+    if (!Number.isFinite(accountId) || accountId <= 0) {
+      sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_account', message: 'accountId is required' });
+      return;
+    }
+    const requestId = crypto.randomUUID();
+    const sent = modConnections.sendToAccount(accountId, {
+      type: 'request_screenshot',
+      accountId,
+      requestId,
+      sentAt: new Date().toISOString(),
+    });
+    if (!sent) {
+      sendSocketJson(socket, { type: 'live_control_error', code: 'account_offline', accountId, message: 'Account is not connected' });
+    }
+  }
+
+  function handleModMessage(account, message) {
+    if (!account || !account.id) return false;
+    if (message.type === 'client_log') {
+      recordLog(account, message);
+      return true;
+    }
+    if (message.type === 'client_screenshot') {
+      recordScreenshot(account, message);
+      return true;
+    }
+    return false;
+  }
+
+  function recordLog(account, message) {
+    const state = mutableState(account.id);
+    state.logs.unshift({
+      id: crypto.randomUUID(),
+      level: cleanLevel(message.level),
+      message: stripMinecraftFormatting(message.message),
+      createdAt: new Date().toISOString(),
+    });
+    state.logs = state.logs.slice(0, MAX_LOGS);
+    state.updatedAt = new Date().toISOString();
+    broadcast(account.id);
+  }
+
+  function recordScreenshot(account, message) {
+    const imageMime = String(message.imageMime || 'image/jpeg').trim();
+    const imageBase64 = String(message.imageBase64 || '').trim();
+    if (!imageBase64) return;
+    const state = mutableState(account.id);
+    state.screenshot = {
+      imageMime,
+      imageBase64,
+      capturedAt: message.capturedAt || new Date().toISOString(),
+    };
+    state.updatedAt = new Date().toISOString();
+    broadcast(account.id);
+  }
+
+  function mutableState(accountId) {
+    const key = Number(accountId);
+    if (!accountStates.has(key)) {
+      accountStates.set(key, {
+        logs: [],
+        screenshot: null,
+        updatedAt: null,
+      });
+    }
+    return accountStates.get(key);
+  }
+
+  function publicState(accountId) {
+    const state = mutableState(accountId);
+    return {
+      logs: state.logs,
+      screenshot: state.screenshot,
+      updatedAt: state.updatedAt,
+    };
+  }
+
+  function broadcast(accountId) {
+    const message = {
+      type: 'live_control_update',
+      accountId: Number(accountId),
+      state: publicState(accountId),
+      sentAt: new Date().toISOString(),
+    };
+    for (const socket of [...dashboardClients]) {
+      if (socket.readyState === WEBSOCKET_CLOSING || socket.readyState === WEBSOCKET_CLOSED) {
+        dashboardClients.delete(socket);
+        continue;
+      }
+      sendSocketJson(socket, message);
+    }
+  }
+
+  function cleanLevel(level) {
+    const value = String(level || 'info').trim().toLowerCase();
+    return ['debug', 'info', 'warn', 'error'].includes(value) ? value : 'info';
+  }
+
+  function stripMinecraftFormatting(value) {
+    return String(value || '').replace(/(?:\u00a7|&)[0-9a-fk-or]/gi, '').trim();
+  }
+
+  return { attachDashboard, handleModMessage };
+}
+
 function createModConnectionRegistry() {
   const clients = new Set();
   const transferSessions = new Map();
@@ -691,6 +824,19 @@ function createModConnectionRegistry() {
       && client.account.id === accountId
       && ['active', 'hypixel'].includes(client.account.status)
     ));
+  }
+
+  function sendToAccount(accountId, payload) {
+    pruneClosedClients();
+    const target = [...clients].find((client) => (
+      client.account
+      && Number(client.account.id) === Number(accountId)
+      && client.socket.readyState !== WEBSOCKET_CLOSING
+      && client.socket.readyState !== WEBSOCKET_CLOSED
+    ));
+    if (!target) return false;
+    sendSocketJson(target.socket, payload);
+    return true;
   }
 
   function handleTransferMessage(socket, message) {
@@ -1104,7 +1250,7 @@ function createModConnectionRegistry() {
     return cleanText(left).toLowerCase() === cleanText(right).toLowerCase();
   }
 
-  return { register, remove, broadcastDisconnect, handleTransferMessage, liveAccountStatuses, hasLiveAccountConnection };
+  return { register, remove, broadcastDisconnect, handleTransferMessage, liveAccountStatuses, hasLiveAccountConnection, sendToAccount };
 }
 
 function applyLiveAccountStatuses(accounts, liveStatuses) {
@@ -1143,6 +1289,7 @@ function attachModWebSocketServer(server, {
   const modSocketServer = enabled ? new WebSocketServer({ noServer: true }) : null;
   const dashboardSocketServer = dashboardAccounts ? new WebSocketServer({ noServer: true }) : null;
   const modConnections = createModConnectionRegistry();
+  const liveControls = createLiveControlStore();
   dashboardAccounts?.setLiveAccountStatusProvider(() => modConnections.liveAccountStatuses());
   server.on('upgrade', (req, socket, head) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -1172,6 +1319,7 @@ function attachModWebSocketServer(server, {
   if (dashboardSocketServer) {
     dashboardSocketServer.on('connection', (socket) => {
       dashboardAccounts.attach(socket);
+      liveControls.attachDashboard(socket, modConnections);
     });
   }
 
@@ -1314,11 +1462,15 @@ function attachModWebSocketServer(server, {
         return;
       }
 
+      if (liveControls.handleModMessage(account, message)) {
+        return;
+      }
+
       sendSocketJson(socket, { type: 'error', code: 'unknown_type', message: 'Unknown message type' });
     });
   });
 
-  return { modSocketServer, dashboardSocketServer, modConnections };
+  return { modSocketServer, dashboardSocketServer, modConnections, liveControls };
 }
 
 function createAppServer(options = {}) {

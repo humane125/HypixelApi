@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
   Ban,
+  Camera,
   Copy,
   Gavel,
   KeyRound,
   LayoutDashboard,
   LogOut,
+  MessageSquareText,
   Plus,
   RefreshCw,
   RotateCw,
@@ -778,6 +780,68 @@ function ProxyConfigModal({ account, draft, onChange, onSave, onClose }) {
   );
 }
 
+function liveControlStateMap(accounts) {
+  return Object.fromEntries((accounts || []).map((entry) => [entry.accountId, entry.state || {}]));
+}
+
+function LiveControlPanel({ account, state, onRequestScreenshot, onClose }) {
+  const logs = state?.logs || [];
+  const screenshot = state?.screenshot || null;
+  return (
+    <div className="modal">
+      <button className="modal-scrim" type="button" aria-label="Close live control" onClick={onClose} />
+      <section className="proxy-modal live-control-modal" aria-modal="true" role="dialog" aria-labelledby="live-control-title">
+        <div className="modal-head">
+          <div>
+            <span className="modal-eyebrow">Live Control</span>
+            <h3 id="live-control-title">{account.minecraft_username}</h3>
+          </div>
+          <button type="button" aria-label="Close live control" onClick={onClose}>x</button>
+        </div>
+
+        <div className="live-control-body">
+          <div className="live-screenshot-card">
+            <div className="live-panel-heading">
+              <span><Camera size={16} aria-hidden="true" />Screenshot</span>
+              <button className="btn secondary compact" type="button" onClick={() => onRequestScreenshot(account.id)}>
+                <RefreshCw size={15} aria-hidden="true" />Refresh
+              </button>
+            </div>
+            <div className="live-screenshot-frame">
+              {screenshot?.imageBase64 ? (
+                <img
+                  src={`data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`}
+                  alt={`${account.minecraft_username} game screenshot`}
+                />
+              ) : (
+                <div className="live-empty-state">No screenshot yet</div>
+              )}
+            </div>
+            <p className="muted live-timestamp">{screenshot?.capturedAt ? `Captured ${screenshot.capturedAt}` : 'Waiting for client capture'}</p>
+          </div>
+
+          <div className="live-log-card">
+            <div className="live-panel-heading">
+              <span><MessageSquareText size={16} aria-hidden="true" />Client Log</span>
+            </div>
+            <div className="live-log-list">
+              {logs.length ? logs.map((entry) => (
+                <div className={`live-log-row ${entry.level || 'info'}`} key={entry.id || `${entry.createdAt}-${entry.message}`}>
+                  <span>{entry.level || 'info'}</span>
+                  <p>{entry.message}</p>
+                  <time>{entry.createdAt}</time>
+                </div>
+              )) : (
+                <div className="live-empty-state">No client logs yet</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function DashboardView() {
   const [me, setMe] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
@@ -793,8 +857,11 @@ function DashboardView() {
   const [roleDrafts, setRoleDrafts] = useState({});
   const [proxyDrafts, setProxyDrafts] = useState({});
   const [activeProxyAccountId, setActiveProxyAccountId] = useState(null);
+  const [activeLiveAccountId, setActiveLiveAccountId] = useState(null);
+  const [liveControlByAccountId, setLiveControlByAccountId] = useState({});
   const [nowMs, setNowMs] = useState(Date.now());
   const [activeAccountFolder, setActiveAccountFolder] = useState('all');
+  const dashboardSocketRef = useRef(null);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -819,6 +886,8 @@ function DashboardView() {
       setAccounts([]);
       setProxyDrafts({});
       setActiveProxyAccountId(null);
+      setActiveLiveAccountId(null);
+      setLiveControlByAccountId({});
       setApiKeys([]);
       setDashboardUsers([]);
       setStatusMessage(err.message);
@@ -836,6 +905,7 @@ function DashboardView() {
 
     let closed = false;
     const socket = new WebSocket(websocketUrl('/api/dashboard/ws'));
+    dashboardSocketRef.current = socket;
 
     socket.onmessage = (event) => {
       try {
@@ -843,6 +913,15 @@ function DashboardView() {
         if (data.type === 'accounts') {
           setAccounts(data.accounts || []);
           setProxyDrafts(proxyDraftsFromAccounts(data.accounts || []));
+        } else if (data.type === 'live_control_snapshot') {
+          setLiveControlByAccountId(liveControlStateMap(data.accounts));
+        } else if (data.type === 'live_control_update') {
+          setLiveControlByAccountId((current) => ({
+            ...current,
+            [data.accountId]: data.state || {},
+          }));
+        } else if (data.type === 'live_control_error') {
+          setStatusMessage(data.message || 'Live control request failed');
         }
       } catch (err) {
         console.error('Dashboard websocket message failed:', err);
@@ -857,6 +936,9 @@ function DashboardView() {
 
     return () => {
       closed = true;
+      if (dashboardSocketRef.current === socket) {
+        dashboardSocketRef.current = null;
+      }
       socket.close();
     };
   }, [me]);
@@ -909,6 +991,8 @@ function DashboardView() {
     setAccounts([]);
     setProxyDrafts({});
     setActiveProxyAccountId(null);
+    setActiveLiveAccountId(null);
+    setLiveControlByAccountId({});
     setApiKeys([]);
     setDashboardUsers([]);
     setIssuedKey(null);
@@ -1151,7 +1235,18 @@ function DashboardView() {
   }, []);
 
   const connectAccount = useCallback((account) => {
-    setStatusMessage(`Connect requested for ${account.minecraft_username}. Remote control is not wired yet.`);
+    setActiveLiveAccountId(account.id);
+    setStatusMessage(`Live control opened for ${account.minecraft_username}`);
+  }, []);
+
+  const requestLiveScreenshot = useCallback((accountId) => {
+    const socket = dashboardSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setStatusMessage('Dashboard live updates are not connected');
+      return;
+    }
+    socket.send(JSON.stringify({ type: 'request_screenshot', accountId }));
+    setStatusMessage('Screenshot refresh requested');
   }, []);
 
   if (dashboardLoading && !me) {
@@ -1214,6 +1309,7 @@ function DashboardView() {
     ? activeAccountFolder
     : 'all';
   const activeProxyAccount = accounts.find((account) => account.id === activeProxyAccountId) || null;
+  const activeLiveAccount = accounts.find((account) => account.id === activeLiveAccountId) || null;
   const visibleAccounts = accounts.filter((account) => {
     const inBannedFolder = isAccountInBannedFolder(account, nowMs);
     if (selectedAccountFolder === 'banned') return inBannedFolder;
@@ -1593,6 +1689,15 @@ function DashboardView() {
           onChange={updateProxyDraft}
           onSave={saveAccountProxy}
           onClose={() => setActiveProxyAccountId(null)}
+        />
+      ) : null}
+
+      {activeLiveAccount ? (
+        <LiveControlPanel
+          account={activeLiveAccount}
+          state={liveControlByAccountId[activeLiveAccount.id]}
+          onRequestScreenshot={requestLiveScreenshot}
+          onClose={() => setActiveLiveAccountId(null)}
         />
       ) : null}
     </>

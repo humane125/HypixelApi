@@ -912,6 +912,72 @@ test('dashboard websocket pushes account status changes from mod websocket', asy
   }
 });
 
+test('dashboard websocket can request live screenshots and receive mod logs', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_live_control',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000031',
+        name: 'LiveControlPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const dashboardSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/dashboard/ws', {
+    headers: { Cookie: await loginDashboard(baseUrl) },
+  });
+  const modSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    const initialPromise = waitForSocketMessage(dashboardSocket);
+    await Promise.all([waitForSocketOpen(dashboardSocket), waitForSocketOpen(modSocket)]);
+    await initialPromise;
+
+    modSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_live_control',
+      username: 'LiveControlPlayer',
+    }));
+    const authed = await waitForSocketMessage(modSocket);
+    assert.strictEqual(authed.type, 'auth_ok');
+
+    dashboardSocket.send(JSON.stringify({
+      type: 'request_screenshot',
+      accountId: authed.account.id,
+    }));
+    const screenshotRequest = await waitForSocketMessageMatching(modSocket, (message) => (
+      message.type === 'request_screenshot'
+      && message.accountId === authed.account.id
+    ));
+    assert.ok(screenshotRequest.requestId);
+
+    modSocket.send(JSON.stringify({
+      type: 'client_log',
+      level: 'info',
+      message: 'Handoff complete, new account is LiveControlPlayer',
+    }));
+    const liveUpdate = await waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+    ));
+    assert.strictEqual(liveUpdate.state.logs[0].message, 'Handoff complete, new account is LiveControlPlayer');
+    assert.strictEqual(liveUpdate.state.logs[0].level, 'info');
+  } finally {
+    closeSocketSilently(dashboardSocket);
+    closeSocketSilently(modSocket);
+    await close(server);
+  }
+});
+
 test('dashboard account list marks stale live heartbeat accounts offline', async () => {
   const { db, server } = createTestServerWithOptions({
     accountHeartbeatWindowMs: 30_000,
