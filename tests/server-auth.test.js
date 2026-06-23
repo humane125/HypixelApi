@@ -960,27 +960,66 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     ));
     assert.ok(screenshotRequest.requestId);
 
+    const liveUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+      && message.state?.logs?.[0]?.message === 'Handoff complete, new account is LiveControlPlayer'
+    ));
     modSocket.send(JSON.stringify({
       type: 'client_log',
       level: 'info',
       source: 'chat',
+      message: 'This normal chat line should not be stored',
+    }));
+    modSocket.send(JSON.stringify({
+      type: 'client_log',
+      level: 'info',
+      source: 'system',
       message: 'Handoff complete, new account is LiveControlPlayer',
       segments: [
         { text: 'Handoff  ', color: '#55ff55', bold: true },
         { text: 'complete', color: '#FFFFFF' },
       ],
     }));
-    const liveUpdate = await waitForSocketMessageMatching(dashboardSocket, (message) => (
-      message.type === 'live_control_update'
-      && message.accountId === authed.account.id
-    ));
+    const liveUpdate = await liveUpdatePromise;
+    assert.strictEqual(liveUpdate.state.logs.length, 1);
     assert.strictEqual(liveUpdate.state.logs[0].message, 'Handoff complete, new account is LiveControlPlayer');
     assert.strictEqual(liveUpdate.state.logs[0].level, 'info');
-    assert.strictEqual(liveUpdate.state.logs[0].source, 'chat');
+    assert.strictEqual(liveUpdate.state.logs[0].source, 'system');
     assert.deepStrictEqual(liveUpdate.state.logs[0].segments, [
       { text: 'Handoff  ', color: '#55FF55', bold: true },
       { text: 'complete', color: '#FFFFFF' },
     ]);
+
+    const screenshotUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+      && message.state?.screenshot?.imageBase64 === 'abc123'
+    ));
+    modSocket.send(JSON.stringify({
+      type: 'client_screenshot',
+      imageMime: 'image/png',
+      imageBase64: 'abc123',
+      capturedAt: '2026-06-23T12:00:00Z',
+    }));
+    const screenshotUpdate = await screenshotUpdatePromise;
+    assert.strictEqual(screenshotUpdate.state.logs.length, 1);
+
+    const statusOkPromise = waitForSocketMessageMatching(modSocket, (message) => (
+      message.type === 'status_ok'
+      && message.status === 'offline'
+    ));
+    const clearedPromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+      && message.state?.clearedAt
+    ));
+    modSocket.send(JSON.stringify({ type: 'offline' }));
+    const statusOk = await statusOkPromise;
+    assert.strictEqual(statusOk.status, 'offline');
+    const cleared = await clearedPromise;
+    assert.deepStrictEqual(cleared.state.logs, []);
+    assert.strictEqual(cleared.state.screenshot, null);
   } finally {
     closeSocketSilently(dashboardSocket);
     closeSocketSilently(modSocket);

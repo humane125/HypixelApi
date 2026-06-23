@@ -688,17 +688,22 @@ function createLiveControlStore() {
   }
 
   function recordLog(account, message) {
+    const source = cleanLogSource(message.source);
+    if (source === 'chat') {
+      return;
+    }
     const state = mutableState(account.id);
     state.logs.unshift({
       id: crypto.randomUUID(),
       level: cleanLevel(message.level),
-      source: cleanLogSource(message.source),
+      source,
       message: stripMinecraftFormatting(message.message),
       segments: cleanLogSegments(message.segments),
       createdAt: new Date().toISOString(),
     });
     state.logs = state.logs.slice(0, MAX_LOGS);
     state.updatedAt = new Date().toISOString();
+    state.clearedAt = null;
     broadcast(account.id);
   }
 
@@ -713,7 +718,17 @@ function createLiveControlStore() {
       capturedAt: message.capturedAt || new Date().toISOString(),
     };
     state.updatedAt = new Date().toISOString();
+    state.clearedAt = null;
     broadcast(account.id);
+  }
+
+  function clearAccount(accountId) {
+    const state = mutableState(accountId);
+    state.logs = [];
+    state.screenshot = null;
+    state.updatedAt = new Date().toISOString();
+    state.clearedAt = state.updatedAt;
+    broadcast(accountId);
   }
 
   function mutableState(accountId) {
@@ -723,6 +738,7 @@ function createLiveControlStore() {
         logs: [],
         screenshot: null,
         updatedAt: null,
+        clearedAt: null,
       });
     }
     return accountStates.get(key);
@@ -734,6 +750,7 @@ function createLiveControlStore() {
       logs: state.logs,
       screenshot: state.screenshot,
       updatedAt: state.updatedAt,
+      clearedAt: state.clearedAt,
     };
   }
 
@@ -803,7 +820,7 @@ function createLiveControlStore() {
     return String(value || '').replace(/(?:\u00a7|&)[0-9a-fk-or]/gi, '');
   }
 
-  return { attachDashboard, handleModMessage };
+  return { attachDashboard, handleModMessage, clearAccount };
 }
 
 function createModConnectionRegistry() {
@@ -1379,8 +1396,10 @@ function attachModWebSocketServer(server, {
       if (!authContext || !account || !account.id) {
         return;
       }
-      if (!modConnections.hasLiveAccountConnection(account.id, socket)) {
-        account = recordMinecraftAccountConnectionStatus(db, account.id, 'offline');
+      const accountId = account.id;
+      if (!modConnections.hasLiveAccountConnection(accountId, socket)) {
+        account = recordMinecraftAccountConnectionStatus(db, accountId, 'offline');
+        liveControls.clearAccount(accountId);
       }
       dashboardAccounts?.broadcast();
     });
@@ -1497,6 +1516,9 @@ function attachModWebSocketServer(server, {
           account,
           lastSeenAt: account.last_seen_at,
         });
+        if (message.type === 'offline' && account.status === 'offline') {
+          liveControls.clearAccount(account.id);
+        }
         if (message.type === 'banned' && account.status === 'banned') {
           modConnections.broadcastDisconnect({ sourceSocket: socket, sourceAccount: account });
         }

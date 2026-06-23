@@ -851,15 +851,22 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
   const logLines = [...(logs || [])].reverse();
   const logScrollRef = useRef(null);
   const [isLogsFollowing, setIsLogsFollowing] = useState(true);
+  const latestLogKey = logLines.length
+    ? (logLines[logLines.length - 1].id || `${logLines[logLines.length - 1].createdAt}-${logLines[logLines.length - 1].message}`)
+    : 'empty';
 
   useEffect(() => {
     if (!isLogsFollowing) return;
-    window.requestAnimationFrame(() => {
+    const scrollToLatest = () => {
       if (logScrollRef.current) {
         logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
       }
+    };
+    window.requestAnimationFrame(() => {
+      scrollToLatest();
+      window.setTimeout(scrollToLatest, 0);
     });
-  }, [logLines.length, isLogsFollowing, title]);
+  }, [latestLogKey, isLogsFollowing, title]);
 
   return (
     <section className="remote-panel remote-log-panel">
@@ -936,7 +943,6 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
 
 function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack }) {
   const logs = state?.logs || [];
-  const chatLogs = logs.filter((entry) => String(entry.source || '').toLowerCase() === 'chat');
   const autoAuctionLogs = logs.filter((entry) => String(entry.source || 'system').toLowerCase() !== 'chat');
   const screenshot = state?.screenshot || null;
   const lastError = state?.lastError || null;
@@ -1077,15 +1083,6 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
       </div>
 
       <RemoteLogPanel
-        title="In-game Logs"
-        description="Recent Minecraft chat lines from this instance."
-        logs={chatLogs}
-        emptyOnlineText="Waiting for the first in-game chat line."
-        emptyOfflineText="This instance is offline. Stored chat lines will appear here when available."
-        isOnline={isOnline}
-      />
-
-      <RemoteLogPanel
         title="Auto Auction Logs"
         description="Recent AutoAuction workflow and system outputs."
         logs={autoAuctionLogs}
@@ -1180,7 +1177,8 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
         } else if (data.type === 'live_control_update') {
           const incomingState = data.state || {};
           const hasScreenshot = Boolean(incomingState.screenshot?.imageBase64);
-          if (hasScreenshot) {
+          const isCleared = Boolean(incomingState.clearedAt);
+          if (hasScreenshot || isCleared) {
             clearScreenshotTimeout(data.accountId);
           }
           setLiveControlByAccountId((current) => {
@@ -1190,8 +1188,8 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
               [data.accountId]: {
                 ...previous,
                 ...incomingState,
-                lastError: hasScreenshot ? null : previous.lastError,
-                isScreenshotLoading: hasScreenshot ? false : Boolean(previous.isScreenshotLoading),
+                lastError: hasScreenshot || isCleared ? null : previous.lastError,
+                isScreenshotLoading: hasScreenshot || isCleared ? false : Boolean(previous.isScreenshotLoading),
               },
             };
           });
