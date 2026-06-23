@@ -318,20 +318,37 @@ function viewFromPath(pathname) {
   return 'dashboard';
 }
 
-function remoteAccountIdFromPath(pathname) {
-  const match = String(pathname || '').match(/^\/remote\/(\d+)/);
-  return match ? Number(match[1]) : null;
+function remoteAccountKeyFromPath(pathname) {
+  const match = String(pathname || '').match(/^\/remote\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function remoteAccountPath(account) {
+  const key = String(account?.minecraft_uuid || account?.minecraft_username || account?.id || '').trim();
+  return `/remote/${encodeURIComponent(key)}`;
+}
+
+function normalizeRemoteKey(value) {
+  return String(value || '').replace(/-/g, '').trim().toLowerCase();
+}
+
+function accountMatchesRemoteKey(account, key) {
+  const normalizedKey = normalizeRemoteKey(key);
+  if (!normalizedKey) return false;
+  return normalizeRemoteKey(account.minecraft_uuid) === normalizedKey
+    || String(account.minecraft_username || '').trim().toLowerCase() === String(key || '').trim().toLowerCase()
+    || String(account.id) === String(key);
 }
 
 function App() {
   const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname));
-  const [remoteAccountId, setRemoteAccountId] = useState(() => remoteAccountIdFromPath(window.location.pathname));
+  const [remoteAccountKey, setRemoteAccountKey] = useState(() => remoteAccountKeyFromPath(window.location.pathname));
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY) || '');
 
   useEffect(() => {
     const handlePopState = () => {
       setActiveView(viewFromPath(window.location.pathname));
-      setRemoteAccountId(remoteAccountIdFromPath(window.location.pathname));
+      setRemoteAccountKey(remoteAccountKeyFromPath(window.location.pathname));
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -342,17 +359,17 @@ function App() {
     localStorage.setItem(TOKEN_STORAGE_KEY, value.trim());
   }, []);
 
-  const navigateView = useCallback((nextView, accountId = null) => {
+  const navigateView = useCallback((nextView, account = null) => {
     const nextPath = nextView === 'auctions'
       ? '/auctions'
-      : nextView === 'remote' && accountId
-        ? `/remote/${accountId}`
+      : nextView === 'remote' && account
+        ? remoteAccountPath(account)
         : '/';
     if (window.location.pathname !== nextPath) {
       window.history.pushState({}, '', nextPath);
     }
     setActiveView(nextView);
-    setRemoteAccountId(nextView === 'remote' ? Number(accountId) : null);
+    setRemoteAccountKey(nextView === 'remote' ? remoteAccountKeyFromPath(nextPath) : null);
   }, []);
 
   return (
@@ -403,7 +420,7 @@ function App() {
 
       {activeView === 'auctions'
         ? <AuctionView token={token} />
-        : <DashboardView remoteAccountId={remoteAccountId} navigateView={navigateView} />}
+        : <DashboardView remoteAccountKey={remoteAccountKey} navigateView={navigateView} />}
     </main>
   );
 }
@@ -956,7 +973,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onBack 
   );
 }
 
-function DashboardView({ remoteAccountId = null, navigateView }) {
+function DashboardView({ remoteAccountKey = null, navigateView }) {
   const [me, setMe] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [accounts, setAccounts] = useState([]);
@@ -1346,7 +1363,7 @@ function DashboardView({ remoteAccountId = null, navigateView }) {
   }, []);
 
   const connectAccount = useCallback((account) => {
-    navigateView('remote', account.id);
+    navigateView('remote', account);
     setStatusMessage(`Live control opened for ${account.minecraft_username}`);
   }, [navigateView]);
 
@@ -1420,8 +1437,8 @@ function DashboardView({ remoteAccountId = null, navigateView }) {
     ? activeAccountFolder
     : 'all';
   const activeProxyAccount = accounts.find((account) => account.id === activeProxyAccountId) || null;
-  const remoteAccount = remoteAccountId
-    ? accounts.find((account) => Number(account.id) === Number(remoteAccountId)) || null
+  const remoteAccount = remoteAccountKey
+    ? accounts.find((account) => accountMatchesRemoteKey(account, remoteAccountKey)) || null
     : null;
   const visibleAccounts = accounts.filter((account) => {
     const inBannedFolder = isAccountInBannedFolder(account, nowMs);
@@ -1437,7 +1454,7 @@ function DashboardView({ remoteAccountId = null, navigateView }) {
   const bannedCount = accounts.filter((account) => isAccountInBannedFolder(account, nowMs)).length;
   const activeKeyCount = apiKeys.filter((key) => !key.revoked_at).length;
 
-  if (remoteAccountId) {
+  if (remoteAccountKey) {
     return (
       <>
         <section className="status-strip">
