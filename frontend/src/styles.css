@@ -99,6 +99,13 @@ textarea {
   line-height: 1;
 }
 
+.brand-mark svg,
+.btn svg,
+.view-tabs svg,
+.stat-card-label svg {
+  flex: 0 0 auto;
+}
+
 h1,
 h2,
 p {
@@ -192,6 +199,10 @@ small {
 }
 
 .view-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 40px;
   border: 0;
   border-right: 1px solid rgba(117, 167, 255, 0.18);
@@ -253,6 +264,10 @@ small {
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 11px 16px;
@@ -427,6 +442,14 @@ textarea:focus {
   text-transform: uppercase;
 }
 
+.stat-card-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+}
+
 .stat-card strong {
   font-size: 1.95rem;
   line-height: 1;
@@ -518,8 +541,8 @@ textarea:focus {
 .dashboard-users-panel td:nth-child(4),
 .dashboard-users-panel th:nth-child(6),
 .dashboard-users-panel td:nth-child(6),
-.api-keys-panel th:nth-child(2),
-.api-keys-panel td:nth-child(2),
+.api-keys-panel th:nth-child(5),
+.api-keys-panel td:nth-child(5),
 .api-keys-panel th:nth-child(6),
 .api-keys-panel td:nth-child(6) {
   display: none;
@@ -537,11 +560,16 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.owner-cell {
+  font-weight: 800;
+  color: var(--text);
+}
+
 .key-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  min-width: 154px;
+  min-width: 176px;
 }
 
 .key-actions .btn {

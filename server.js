@@ -16,6 +16,7 @@ const {
   authenticateApiKey,
   listApiKeys,
   revokeApiKey,
+  deleteApiKey,
   rotateApiKey,
   countActiveApiKeys,
   setUserPassword,
@@ -1895,6 +1896,28 @@ function createAppServer(options = {}) {
         }
         revokeApiKey(db, body.apiKeyId);
         auditRequest(db, access.auth, req, 'api_key.revoke', { apiKeyId: body.apiKeyId });
+        writeJson(res, 200, { ok: true });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/api-keys/delete' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardOwner(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const deleted = deleteApiKey(db, body.apiKeyId);
+        auditRequest(db, access.auth, req, 'api_key.delete', {
+          apiKeyId: deleted.id,
+          userId: deleted.user_id,
+          name: deleted.name,
+          prefix: deleted.key_prefix,
+        });
         writeJson(res, 200, { ok: true });
       } catch (err) {
         writeJson(res, 400, { error: err.message });

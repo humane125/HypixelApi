@@ -1,5 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  Activity,
+  Ban,
+  Copy,
+  Gavel,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Search,
+  Server,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  UserPlus,
+  Users,
+} from 'lucide-react';
 import './styles.css';
 
 const TOKEN_STORAGE_KEY = 'auctionApiToken';
@@ -299,7 +318,7 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-mark" aria-hidden="true">◆</div>
+          <div className="brand-mark" aria-hidden="true"><Server size={18} /></div>
           <div>
             <h1><span>SkyBlock</span> Control</h1>
             <p className="muted">Auction pricing, API keys, and registered Minecraft accounts</p>
@@ -307,8 +326,8 @@ function App() {
         </div>
         <div className="topbar-actions">
           <nav className="view-tabs" aria-label="Primary views">
-            <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => setActiveView('auctions')}>Auctions</button>
-            <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setActiveView('dashboard')}>Dashboard</button>
+            <button className={activeView === 'auctions' ? 'active' : ''} type="button" onClick={() => setActiveView('auctions')}><Gavel size={16} aria-hidden="true" />Auctions</button>
+            <button className={activeView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setActiveView('dashboard')}><LayoutDashboard size={16} aria-hidden="true" />Dashboard</button>
           </nav>
           {activeView === 'dashboard' ? (
             <div className="topbar-metrics" aria-label="Dashboard status">
@@ -486,7 +505,7 @@ function AuctionView({ token }) {
     <>
       <section className="status-strip">
         <p className="muted">{cacheLine}</p>
-        <button className="btn secondary" type="button" onClick={runRefresh} disabled={busy}>Refresh Index</button>
+        <button className="btn secondary" type="button" onClick={runRefresh} disabled={busy}><RefreshCw size={16} aria-hidden="true" />Refresh Index</button>
       </section>
 
       {progress ? (
@@ -559,17 +578,17 @@ function AuctionView({ token }) {
             </select>
           </Field>
           <div className="form-actions">
-            <button className="btn primary" type="submit" disabled={busy}>{busy ? 'Working...' : 'Search'}</button>
-            <button className="btn gold" type="button" onClick={runRecommendation} disabled={busy}>Recommend BIN</button>
+            <button className="btn primary" type="submit" disabled={busy}><Search size={16} aria-hidden="true" />{busy ? 'Working...' : 'Search'}</button>
+            <button className="btn gold" type="button" onClick={runRecommendation} disabled={busy}><Activity size={16} aria-hidden="true" />Recommend BIN</button>
           </div>
         </form>
       </section>
 
       <section className="stats-row">
-        <StatCard title="Lowest BIN" value={lowest ? formatPrice(lowest.price) : '---'} detail={lowest ? `${formatNumber(lowest.kills)} kills` : 'No result'} variant="legendary" />
-        <StatCard title="Average BIN" value={average ? formatPrice(average) : '---'} detail="Filtered listings" variant="mythic" />
-        <StatCard title="Matches" value={formatNumber(results.length)} detail={source} variant="rare" />
-        <StatCard title="Recommended BIN" value={recommendation?.price ? formatPrice(recommendation.price) : '---'} detail={recommendation?.detail || 'Run recommendation'} variant="recommendation" />
+        <StatCard title="Lowest BIN" value={lowest ? formatPrice(lowest.price) : '---'} detail={lowest ? `${formatNumber(lowest.kills)} kills` : 'No result'} variant="legendary" icon={Gavel} />
+        <StatCard title="Average BIN" value={average ? formatPrice(average) : '---'} detail="Filtered listings" variant="mythic" icon={Activity} />
+        <StatCard title="Matches" value={formatNumber(results.length)} detail={source} variant="rare" icon={Search} />
+        <StatCard title="Recommended BIN" value={recommendation?.price ? formatPrice(recommendation.price) : '---'} detail={recommendation?.detail || 'Run recommendation'} variant="recommendation" icon={KeyRound} />
       </section>
 
       <section className="results-panel">
@@ -585,10 +604,13 @@ function AuctionView({ token }) {
   );
 }
 
-function StatCard({ title, value, detail, variant }) {
+function StatCard({ title, value, detail, variant, icon: Icon }) {
   return (
     <article className={`stat-card rarity-${variant}`}>
-      <span>{title}</span>
+      <div className="stat-card-label">
+        {Icon ? <Icon size={17} aria-hidden="true" /> : null}
+        <span>{title}</span>
+      </div>
       <strong>{value}</strong>
       <small>{detail}</small>
     </article>
@@ -1059,6 +1081,21 @@ function DashboardView() {
     }
   }, [loadDashboard]);
 
+  const deleteKey = useCallback(async (key) => {
+    const confirmed = window.confirm(`Delete revoked API key "${key.name}"?`);
+    if (!confirmed) return;
+    try {
+      await apiFetch('/api/dashboard/api-keys/delete', null, {
+        method: 'POST',
+        body: JSON.stringify({ apiKeyId: key.id }),
+      });
+      setStatusMessage('API key deleted');
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
   const replaceKey = useCallback(async (apiKeyId) => {
     try {
       const body = await apiFetch('/api/dashboard/api-keys/replace', null, {
@@ -1154,16 +1191,16 @@ function DashboardView() {
       <section className="status-strip">
         <p className="muted">{me ? `Signed in as ${me.username} (${me.role})` : statusMessage}</p>
         <div className="inline-actions">
-          <button className="btn secondary" type="button" onClick={loadDashboard}>Reload</button>
-          <button className="btn secondary" type="button" onClick={logout}>Log Out</button>
+          <button className="btn secondary" type="button" onClick={loadDashboard}><RefreshCw size={16} aria-hidden="true" />Reload</button>
+          <button className="btn secondary" type="button" onClick={logout}><LogOut size={16} aria-hidden="true" />Log Out</button>
         </div>
       </section>
 
       <section className="stats-row dashboard-summary" aria-label="Dashboard summary">
-        <StatCard title="Connected Clients" value={formatNumber(connectedCount)} detail={`${formatNumber(accounts.length)} registered accounts`} variant="rare" />
-        <StatCard title="Hypixel Active" value={formatNumber(hypixelCount)} detail="Currently on Hypixel" variant="mythic" />
-        <StatCard title="Banned Folder" value={formatNumber(bannedCount)} detail="Held outside active rotation" variant="legendary" />
-        <StatCard title="Active API Keys" value={formatNumber(activeKeyCount)} detail={`${formatNumber(apiKeys.length)} total keys`} variant="recommendation" />
+        <StatCard title="Connected Clients" value={formatNumber(connectedCount)} detail={`${formatNumber(accounts.length)} registered accounts`} variant="rare" icon={Users} />
+        <StatCard title="Hypixel Active" value={formatNumber(hypixelCount)} detail="Currently on Hypixel" variant="mythic" icon={Activity} />
+        <StatCard title="Banned Folder" value={formatNumber(bannedCount)} detail="Held outside active rotation" variant="legendary" icon={Ban} />
+        <StatCard title="Active API Keys" value={formatNumber(activeKeyCount)} detail={`${formatNumber(apiKeys.length)} total keys`} variant="recommendation" icon={KeyRound} />
       </section>
 
       <section className="dashboard-workspace">
@@ -1186,7 +1223,7 @@ function DashboardView() {
             <Field label="Notes">
               <textarea value={accountForm.notes} onChange={(event) => updateAccountForm('notes', event.target.value)} placeholder="Owner, use case, or device notes" />
             </Field>
-            <button className="btn primary" type="submit">Add Account</button>
+            <button className="btn primary" type="submit"><Plus size={16} aria-hidden="true" />Add Account</button>
           </form>
         </div>
         ) : null}
@@ -1210,7 +1247,7 @@ function DashboardView() {
                   <option value="owner">Owner</option>
                 </select>
               </Field>
-              <button className="btn primary" type="submit">Create User</button>
+              <button className="btn primary" type="submit"><UserPlus size={16} aria-hidden="true" />Create User</button>
             </form>
           </div>
         ) : null}
@@ -1240,14 +1277,14 @@ function DashboardView() {
                 </label>
               ))}
             </div>
-            <button className="btn gold" type="submit">Create Key</button>
+            <button className="btn gold" type="submit"><KeyRound size={16} aria-hidden="true" />Create Key</button>
           </form>
           {issuedKey ? (
             <div className="issued-key">
               <span>New key</span>
               <div className="issued-key-row">
                 <code>{issuedKey.rawKey}</code>
-                <button className="btn secondary compact" type="button" onClick={() => copyText(issuedKey.rawKey, 'API key')}>Copy</button>
+                <button className="btn secondary compact" type="button" onClick={() => copyText(issuedKey.rawKey, 'API key')}><Copy size={15} aria-hidden="true" />Copy</button>
               </div>
             </div>
           ) : null}
@@ -1290,7 +1327,7 @@ function DashboardView() {
                           <option value="manager">manager</option>
                           <option value="owner">owner</option>
                         </select>
-                        <button className="btn secondary compact" type="button" onClick={() => updateDashboardUserRole(user)}>Save</button>
+                        <button className="btn secondary compact" type="button" onClick={() => updateDashboardUserRole(user)}><ShieldCheck size={15} aria-hidden="true" />Save</button>
                       </td>
                       <td>
                         <button
@@ -1299,7 +1336,7 @@ function DashboardView() {
                           disabled={user.id === me.id}
                           onClick={() => deleteDashboardUser(user)}
                         >
-                          Delete
+                          <Trash2 size={15} aria-hidden="true" />Delete
                         </button>
                       </td>
                     </tr>
@@ -1413,16 +1450,16 @@ function DashboardView() {
                     <div className="account-controls">
                       <div className="account-action-row">
                         {canManageUsers ? (
-                          <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}>Connect</button>
+                          <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}><Activity size={15} aria-hidden="true" />Connect</button>
                         ) : null}
                         {canManageUsers ? (
-                          <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}>Delete Account</button>
+                          <button className="btn danger compact" type="button" onClick={() => deleteMinecraftAccount(account)}><Trash2 size={15} aria-hidden="true" />Delete Account</button>
                         ) : null}
                         {canManageAccounts && displayStatus === 'banned' && !isAccountInBannedFolder(account, nowMs) ? (
-                          <button className="btn secondary compact wide-action" type="button" onClick={() => moveMinecraftAccountToBannedFolder(account)}>Move to Banned</button>
+                          <button className="btn secondary compact wide-action" type="button" onClick={() => moveMinecraftAccountToBannedFolder(account)}><Ban size={15} aria-hidden="true" />Move to Banned</button>
                         ) : null}
                         {canManageAccounts ? (
-                          <button className="btn secondary compact wide-action" type="button" onClick={() => openProxyModal(account)}>Configure</button>
+                          <button className="btn secondary compact wide-action" type="button" onClick={() => openProxyModal(account)}><Settings size={15} aria-hidden="true" />Configure</button>
                         ) : null}
                       </div>
                     </div>
@@ -1447,7 +1484,7 @@ function DashboardView() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>User</th>
+                <th>Owner</th>
                 <th>Prefix</th>
                 <th>Scopes</th>
                 <th>Last Used</th>
@@ -1461,7 +1498,7 @@ function DashboardView() {
                 return (
                   <tr key={key.id}>
                     <td>{key.name}</td>
-                    <td>{key.username}</td>
+                    <td className="owner-cell">{key.username}</td>
                     <td><code>{key.key_prefix}</code></td>
                     <td>{key.scopes.join(', ')}</td>
                     <td>{key.last_used_at || 'Never'}</td>
@@ -1475,7 +1512,7 @@ function DashboardView() {
                             title="Copy full API key"
                             onClick={() => copyText(fullKey, 'API key')}
                           >
-                            Copy Key
+                            <Copy size={15} aria-hidden="true" />Copy
                           </button>
                         ) : (
                           <button
@@ -1485,10 +1522,14 @@ function DashboardView() {
                             title="Replace this old unrecoverable key with a new full key"
                             onClick={() => replaceKey(key.id)}
                           >
-                            Replace
+                            <RotateCw size={15} aria-hidden="true" />Replace
                           </button>
                         )}
-                        <button className="btn danger compact" type="button" disabled={Boolean(key.revoked_at)} onClick={() => revokeKey(key.id)}>Revoke</button>
+                        {key.revoked_at ? (
+                          <button className="btn danger compact" type="button" onClick={() => deleteKey(key)}><Trash2 size={15} aria-hidden="true" />Delete</button>
+                        ) : (
+                          <button className="btn danger compact" type="button" onClick={() => revokeKey(key.id)}><ShieldCheck size={15} aria-hidden="true" />Revoke</button>
+                        )}
                       </div>
                     </td>
                   </tr>

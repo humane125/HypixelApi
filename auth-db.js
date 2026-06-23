@@ -420,6 +420,24 @@ function revokeApiKey(db, apiKeyId) {
   db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(nowIso(), apiKeyId);
 }
 
+function deleteApiKey(db, apiKeyId) {
+  const existing = db.prepare(`
+    SELECT id, user_id, name, key_prefix, scopes_json, revoked_at
+    FROM api_keys
+    WHERE id = ?
+  `).get(apiKeyId);
+
+  if (!existing) throw new Error('API key not found');
+  if (!existing.revoked_at) throw new Error('Revoke the API key before deleting it');
+
+  db.prepare('DELETE FROM api_keys WHERE id = ?').run(existing.id);
+  return {
+    ...existing,
+    scopes: parseScopes(existing.scopes_json),
+    scopes_json: undefined,
+  };
+}
+
 function rotateApiKey(db, apiKeyId) {
   const rotate = db.transaction((id) => {
     const existing = db.prepare(`
@@ -974,6 +992,7 @@ module.exports = {
   createApiKey,
   authenticateApiKey,
   revokeApiKey,
+  deleteApiKey,
   rotateApiKey,
   listApiKeys,
   countActiveApiKeys,

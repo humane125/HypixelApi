@@ -1499,6 +1499,49 @@ test('owner can replace an unrecoverable api key and receive the new raw key', a
   }
 });
 
+test('owner can delete revoked api keys but not active api keys', async () => {
+  const { db, server } = createTestServer();
+  const baseUrl = await listen(server);
+  try {
+    const cookie = await loginDashboard(baseUrl);
+    const activeKey = db.prepare('SELECT id FROM api_keys WHERE name = ?').get('owner key');
+
+    const activeDelete = await fetch(`${baseUrl}/api/dashboard/api-keys/delete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({ apiKeyId: activeKey.id }),
+    });
+    assert.strictEqual(activeDelete.status, 400);
+    assert.ok(db.prepare('SELECT id FROM api_keys WHERE id = ?').get(activeKey.id));
+
+    const revoked = await fetch(`${baseUrl}/api/dashboard/api-keys/revoke`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({ apiKeyId: activeKey.id }),
+    });
+    assert.strictEqual(revoked.status, 200);
+
+    const deleted = await fetch(`${baseUrl}/api/dashboard/api-keys/delete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({ apiKeyId: activeKey.id }),
+    });
+    assert.strictEqual(deleted.status, 200);
+    assert.strictEqual(db.prepare('SELECT id FROM api_keys WHERE id = ?').get(activeKey.id), undefined);
+  } finally {
+    await close(server);
+  }
+});
+
 test('admin cannot issue api key for arbitrary typed username', async () => {
   const { server } = createTestServer();
   const baseUrl = await listen(server);
