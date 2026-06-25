@@ -814,6 +814,11 @@ function liveControlStateMap(accounts) {
   return Object.fromEntries((accounts || []).map((entry) => [entry.accountId, entry.state || {}]));
 }
 
+function dashboardReconnectDelayMs(attempt) {
+  const cleanAttempt = Math.max(0, Number.isFinite(Number(attempt)) ? Number(attempt) : 0);
+  return Math.min(10_000, 1_000 * (2 ** Math.min(4, cleanAttempt)));
+}
+
 function remoteLogSourceLabel(source) {
   const normalized = String(source || 'system').trim().toLowerCase();
   if (normalized === 'chat') return 'Chat';
@@ -1252,74 +1257,103 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     if (!me) return undefined;
 
     let closed = false;
-    const socket = new WebSocket(websocketUrl('/api/dashboard/ws'));
-    dashboardSocketRef.current = socket;
+    let reconnectAttempt = 0;
+    let reconnectTimer = null;
 
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'accounts') {
-          const nextAccounts = data.accounts || [];
-          setAccounts(nextAccounts);
-          setProxyDrafts((current) => mergeProxyDraftsFromAccounts(nextAccounts, current, activeProxyAccountId));
-        } else if (data.type === 'live_control_snapshot') {
-          setLiveControlByAccountId(liveControlStateMap(data.accounts));
-        } else if (data.type === 'live_control_update') {
-          const incomingState = data.state || {};
-          const hasScreenshot = Boolean(incomingState.screenshot?.imageBase64);
-          const isCleared = Boolean(incomingState.clearedAt);
-          if (hasScreenshot || isCleared) {
-            clearScreenshotTimeout(data.accountId);
-          }
-          setLiveControlByAccountId((current) => {
-            const previous = current[data.accountId] || {};
-            return {
-              ...current,
-              [data.accountId]: {
-                ...previous,
-                ...incomingState,
-                lastError: hasScreenshot || isCleared ? null : previous.lastError,
-                isScreenshotLoading: hasScreenshot || isCleared ? false : Boolean(previous.isScreenshotLoading),
-              },
-            };
-          });
-        } else if (data.type === 'live_control_action_sent') {
-          setStatusMessage('Remote action sent');
-        } else if (data.type === 'live_control_error') {
-          setStatusMessage(data.message || 'Live control request failed');
-          if (data.accountId) {
-            clearScreenshotTimeout(data.accountId);
-            setLiveControlByAccountId((current) => ({
-              ...current,
-              [data.accountId]: {
-                ...(current[data.accountId] || {}),
-                isScreenshotLoading: false,
-                lastError: {
-                  code: data.code || 'live_control_error',
-                  message: data.message || 'Live control request failed',
-                  createdAt: new Date().toISOString(),
-                },
-              },
-            }));
-          }
+    const connectSocket = () => {
+      if (closed) return;
+      const attemptForConnection = reconnectAttempt;
+      const socket = new WebSocket(websocketUrl('/api/dashboard/ws'));
+      dashboardSocketRef.current = socket;
+
+      socket.onopen = () => {
+        if (attemptForConnection > 0) {
+          setStatusMessage('Dashboard live updates reconnected');
         }
-      } catch (err) {
-        console.error('Dashboard websocket message failed:', err);
-      }
+        reconnectAttempt = 0;
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'accounts') {
+            const nextAccounts = data.accounts || [];
+            setAccounts(nextAccounts);
+            setProxyDrafts((current) => mergeProxyDraftsFromAccounts(nextAccounts, current, activeProxyAccountId));
+          } else if (data.type === 'live_control_snapshot') {
+            setLiveControlByAccountId(liveControlStateMap(data.accounts));
+          } else if (data.type === 'live_control_update') {
+            const incomingState = data.state || {};
+            const hasScreenshot = Boolean(incomingState.screenshot?.imageBase64);
+            const isCleared = Boolean(incomingState.clearedAt);
+            if (hasScreenshot || isCleared) {
+              clearScreenshotTimeout(data.accountId);
+            }
+            setLiveControlByAccountId((current) => {
+              const previous = current[data.accountId] || {};
+              return {
+                ...current,
+                [data.accountId]: {
+                  ...previous,
+                  ...incomingState,
+                  lastError: hasScreenshot || isCleared ? null : previous.lastError,
+                  isScreenshotLoading: hasScreenshot || isCleared ? false : Boolean(previous.isScreenshotLoading),
+                },
+              };
+            });
+          } else if (data.type === 'live_control_action_sent') {
+            setStatusMessage('Remote action sent');
+          } else if (data.type === 'live_control_error') {
+            setStatusMessage(data.message || 'Live control request failed');
+            if (data.accountId) {
+              clearScreenshotTimeout(data.accountId);
+              setLiveControlByAccountId((current) => ({
+                ...current,
+                [data.accountId]: {
+                  ...(current[data.accountId] || {}),
+                  isScreenshotLoading: false,
+                  lastError: {
+                    code: data.code || 'live_control_error',
+                    message: data.message || 'Live control request failed',
+                    createdAt: new Date().toISOString(),
+                  },
+                },
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Dashboard websocket message failed:', err);
+        }
+      };
+
+      socket.onclose = () => {
+        if (dashboardSocketRef.current === socket) {
+          dashboardSocketRef.current = null;
+        }
+        if (closed) return;
+        const delayMs = dashboardReconnectDelayMs(reconnectAttempt);
+        reconnectAttempt += 1;
+        setStatusMessage(`Dashboard live updates disconnected; reconnecting in ${Math.round(delayMs / 1000)}s`);
+        reconnectTimer = window.setTimeout(connectSocket, delayMs);
+      };
+
+      socket.onerror = () => {
+        socket.close();
+      };
     };
-    socket.onclose = () => {
-      if (!closed) setStatusMessage('Dashboard live updates disconnected');
-    };
-    socket.onerror = () => {
-      socket.close();
-    };
+
+    connectSocket();
 
     return () => {
       closed = true;
-      if (dashboardSocketRef.current === socket) {
-        dashboardSocketRef.current = null;
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
       }
-      socket.close();
+      if (dashboardSocketRef.current) {
+        const socket = dashboardSocketRef.current;
+        dashboardSocketRef.current = null;
+        socket.close();
+      }
     };
   }, [activeProxyAccountId, me, clearScreenshotTimeout]);
 
