@@ -778,18 +778,19 @@ function createLiveControlStore() {
   function recordLog(account, message) {
     const source = cleanLogSource(message.source);
     const state = mutableState(account.id);
-    state.logs.unshift({
+    const logEntry = {
       id: crypto.randomUUID(),
       level: cleanLevel(message.level),
       source,
       message: stripMinecraftFormatting(message.message),
       segments: cleanLogSegments(message.segments),
       createdAt: new Date().toISOString(),
-    });
+    };
+    state.logs.unshift(logEntry);
     state.logs = state.logs.slice(0, MAX_LOGS);
     state.updatedAt = new Date().toISOString();
     state.clearedAt = null;
-    broadcast(account.id);
+    broadcastLog(account.id, logEntry, state.updatedAt);
   }
 
   function recordScreenshot(account, message) {
@@ -806,7 +807,11 @@ function createLiveControlStore() {
     };
     state.updatedAt = receivedAt;
     state.clearedAt = null;
-    broadcast(account.id);
+    broadcastState(account.id, {
+      screenshot: state.screenshot,
+      updatedAt: state.updatedAt,
+      clearedAt: null,
+    });
   }
 
   function clearAccount(accountId) {
@@ -853,10 +858,34 @@ function createLiveControlStore() {
   }
 
   function broadcast(accountId) {
+    broadcastState(accountId, publicState(accountId));
+  }
+
+  function broadcastState(accountId, state) {
     const message = {
       type: 'live_control_update',
       accountId: Number(accountId),
-      state: publicState(accountId),
+      state,
+      sentAt: new Date().toISOString(),
+    };
+    for (const socket of [...dashboardClients]) {
+      if (socket.readyState === WEBSOCKET_CLOSING || socket.readyState === WEBSOCKET_CLOSED) {
+        dashboardClients.delete(socket);
+        continue;
+      }
+      if (!isSubscribedToLiveControl(socket, accountId)) {
+        continue;
+      }
+      sendSocketJson(socket, message);
+    }
+  }
+
+  function broadcastLog(accountId, logEntry, updatedAt) {
+    const message = {
+      type: 'live_control_log',
+      accountId: Number(accountId),
+      log: logEntry,
+      updatedAt,
       sentAt: new Date().toISOString(),
     };
     for (const socket of [...dashboardClients]) {

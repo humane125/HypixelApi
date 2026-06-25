@@ -1041,10 +1041,15 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     assert.strictEqual(actionAck.actionType, 'client_command');
     assert.strictEqual(actionAck.requestId, action.requestId);
 
-    const liveUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
-      message.type === 'live_control_update'
+    const normalLogPromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_log'
       && message.accountId === authed.account.id
-      && message.state?.logs?.[0]?.message === 'Handoff complete, new account is LiveControlPlayer'
+      && message.log?.message === 'This normal chat line should be stored'
+    ));
+    const liveUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_log'
+      && message.accountId === authed.account.id
+      && message.log?.message === 'Handoff complete, new account is LiveControlPlayer'
     ));
     modSocket.send(JSON.stringify({
       type: 'client_log',
@@ -1062,22 +1067,21 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
         { text: 'complete', color: '#FFFFFF' },
       ],
     }));
+    const normalLog = await normalLogPromise;
     const liveUpdate = await liveUpdatePromise;
-    assert.strictEqual(liveUpdate.state.logs.length, 2);
-    assert.strictEqual(liveUpdate.state.logs[0].message, 'Handoff complete, new account is LiveControlPlayer');
-    assert.strictEqual(liveUpdate.state.logs[0].level, 'info');
-    assert.strictEqual(liveUpdate.state.logs[0].source, 'system');
-    assert.strictEqual(liveUpdate.state.logs[1].message, 'This normal chat line should be stored');
-    assert.strictEqual(liveUpdate.state.logs[1].source, 'chat');
-    assert.deepStrictEqual(liveUpdate.state.logs[0].segments, [
+    assert.strictEqual(normalLog.log.source, 'chat');
+    assert.strictEqual(liveUpdate.log.level, 'info');
+    assert.strictEqual(liveUpdate.log.source, 'system');
+    assert.strictEqual(liveUpdate.state, undefined);
+    assert.deepStrictEqual(liveUpdate.log.segments, [
       { text: 'Handoff  ', color: '#55FF55', bold: true },
       { text: 'complete', color: '#FFFFFF' },
     ]);
 
     const cappedUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
-      message.type === 'live_control_update'
+      message.type === 'live_control_log'
       && message.accountId === authed.account.id
-      && message.state?.logs?.[0]?.message === 'cap-line-104'
+      && message.log?.message === 'cap-line-104'
     ));
     for (let index = 0; index < 105; index += 1) {
       modSocket.send(JSON.stringify({
@@ -1088,9 +1092,8 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       }));
     }
     const cappedUpdate = await cappedUpdatePromise;
-    assert.strictEqual(cappedUpdate.state.logs.length, 100);
-    assert.strictEqual(cappedUpdate.state.logs[0].message, 'cap-line-104');
-    assert.strictEqual(cappedUpdate.state.logs[cappedUpdate.state.logs.length - 1].message, 'cap-line-5');
+    assert.strictEqual(cappedUpdate.state, undefined);
+    assert.strictEqual(cappedUpdate.log.message, 'cap-line-104');
 
     const screenshotUpdatePromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
       message.type === 'live_control_update'
@@ -1104,7 +1107,7 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
       capturedAt: '2026-06-23T12:00:00Z',
     }));
     const screenshotUpdate = await screenshotUpdatePromise;
-    assert.strictEqual(screenshotUpdate.state.logs.length, 100);
+    assert.strictEqual(screenshotUpdate.state.logs, undefined);
     assert.strictEqual(screenshotUpdate.state.screenshot.capturedAt, '2026-06-23T12:00:00Z');
     assert.ok(screenshotUpdate.state.screenshot.receivedAt);
     assert.notStrictEqual(screenshotUpdate.state.screenshot.receivedAt, screenshotUpdate.state.screenshot.capturedAt);
@@ -1180,14 +1183,14 @@ test('dashboard websocket only streams live control updates for subscribed remot
     }));
 
     const subscribedUpdatePromise = waitForSocketMessageMatching(subscribedDashboard, (message) => (
-      message.type === 'live_control_update'
+      message.type === 'live_control_log'
       && message.accountId === authed.account.id
-      && message.state?.logs?.[0]?.message === 'Only subscribed dashboard should download this'
+      && message.log?.message === 'Only subscribed dashboard should download this'
     ));
     const idleNoUpdatePromise = waitForNoSocketMessageMatching(idleDashboard, (message) => (
-      message.type === 'live_control_update'
+      message.type === 'live_control_log'
       && message.accountId === authed.account.id
-      && message.state?.logs?.[0]?.message === 'Only subscribed dashboard should download this'
+      && message.log?.message === 'Only subscribed dashboard should download this'
     ), 300);
 
     modSocket.send(JSON.stringify({
@@ -1202,6 +1205,69 @@ test('dashboard websocket only streams live control updates for subscribed remot
   } finally {
     closeSocketSilently(subscribedDashboard);
     closeSocketSilently(idleDashboard);
+    closeSocketSilently(modSocket);
+    await close(server);
+  }
+});
+
+test('dashboard websocket streams new log lines incrementally', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_incremental_live_control',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000033',
+        name: 'IncrementalLivePlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const dashboardSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/dashboard/ws', {
+    headers: { Cookie: await loginDashboard(baseUrl) },
+  });
+  const modSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await Promise.all([waitForSocketOpen(dashboardSocket), waitForSocketOpen(modSocket)]);
+
+    modSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_incremental_live_control',
+      username: 'IncrementalLivePlayer',
+    }));
+    const authed = await waitForSocketMessageMatching(modSocket, (message) => message.type === 'auth_ok');
+
+    dashboardSocket.send(JSON.stringify({
+      type: 'live_control_subscribe',
+      accountId: authed.account.id,
+    }));
+
+    const logPromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
+      message.type === 'live_control_log'
+      && message.accountId === authed.account.id
+      && message.log?.message === 'single incremental line'
+    ));
+    modSocket.send(JSON.stringify({
+      type: 'client_log',
+      level: 'info',
+      source: 'chat',
+      message: 'single incremental line',
+    }));
+
+    const logMessage = await logPromise;
+    assert.ok(logMessage.log.id);
+    assert.strictEqual(logMessage.log.source, 'chat');
+    assert.strictEqual(logMessage.state, undefined);
+  } finally {
+    closeSocketSilently(dashboardSocket);
     closeSocketSilently(modSocket);
     await close(server);
   }

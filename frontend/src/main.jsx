@@ -1307,6 +1307,21 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
                 },
               };
             });
+          } else if (data.type === 'live_control_log') {
+            const incomingLog = data.log;
+            if (!incomingLog) return;
+            setLiveControlByAccountId((current) => {
+              const previous = current[data.accountId] || {};
+              return {
+                ...current,
+                [data.accountId]: {
+                  ...previous,
+                  logs: [incomingLog, ...(previous.logs || [])].slice(0, 100),
+                  updatedAt: data.updatedAt || previous.updatedAt,
+                  clearedAt: null,
+                },
+              };
+            });
           } else if (data.type === 'live_control_action_sent') {
             setStatusMessage('Remote action sent');
           } else if (data.type === 'live_control_error') {
