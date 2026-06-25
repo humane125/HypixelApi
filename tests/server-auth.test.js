@@ -286,41 +286,61 @@ test('mod websocket lists connected transfer accounts and accepts a transfer inv
     assert.strictEqual(receiverAccepted.role, 'receiver');
     assert.strictEqual(senderAccepted.session.id, receiverAccepted.session.id);
 
-    sender.send(JSON.stringify({ type: 'transfer_run', quantity: 128 }));
-    const senderRun = await waitForSocketMessage(sender);
-    const receiverRun = await waitForSocketMessage(receiver);
+    const senderSwitchedPromise = waitForSocketMessage(sender);
+    const receiverSwitchedPromise = waitForSocketMessage(receiver);
+    receiver.send(JSON.stringify({ type: 'transfer_switch' }));
+    const senderSwitched = await senderSwitchedPromise;
+    const receiverSwitched = await receiverSwitchedPromise;
+    assert.strictEqual(senderSwitched.type, 'transfer_accepted');
+    assert.strictEqual(senderSwitched.role, 'receiver');
+    assert.strictEqual(senderSwitched.session.senderUsername, 'ReceiverPlayer');
+    assert.strictEqual(senderSwitched.session.receiverUsername, 'SenderPlayer');
+    assert.strictEqual(receiverSwitched.type, 'transfer_accepted');
+    assert.strictEqual(receiverSwitched.role, 'sender');
+    assert.strictEqual(receiverSwitched.session.senderUsername, 'ReceiverPlayer');
+    assert.strictEqual(receiverSwitched.session.receiverUsername, 'SenderPlayer');
+
+    const senderRunPromise = waitForSocketMessage(receiver);
+    const receiverRunPromise = waitForSocketMessage(sender);
+    receiver.send(JSON.stringify({ type: 'transfer_run', quantity: 128 }));
+    const senderRun = await senderRunPromise;
+    const receiverRun = await receiverRunPromise;
     assert.strictEqual(senderRun.type, 'transfer_run_sent');
     assert.strictEqual(senderRun.quantity, 128);
     assert.strictEqual(receiverRun.type, 'transfer_run');
     assert.strictEqual(receiverRun.quantity, 128);
     assert.strictEqual(receiverRun.session.itemName, 'ENCHANTED DIAMOND');
 
-    receiver.send(JSON.stringify({ type: 'transfer_buy_order_ready', quantity: 128 }));
-    const senderReady = await waitForSocketMessage(sender);
+    const senderReadyPromise = waitForSocketMessage(receiver);
+    sender.send(JSON.stringify({ type: 'transfer_buy_order_ready', quantity: 128 }));
+    const senderReady = await senderReadyPromise;
     assert.strictEqual(senderReady.type, 'transfer_buy_order_ready');
     assert.strictEqual(senderReady.quantity, 128);
     assert.strictEqual(senderReady.session.itemName, 'ENCHANTED DIAMOND');
 
-    receiver.send(JSON.stringify({ type: 'transfer_sell_offer_ready', quantity: 128 }));
-    const senderSellOfferReady = await waitForSocketMessage(sender);
+    const senderSellOfferReadyPromise = waitForSocketMessage(receiver);
+    sender.send(JSON.stringify({ type: 'transfer_sell_offer_ready', quantity: 128 }));
+    const senderSellOfferReady = await senderSellOfferReadyPromise;
     assert.strictEqual(senderSellOfferReady.type, 'transfer_sell_offer_ready');
     assert.strictEqual(senderSellOfferReady.quantity, 128);
     assert.strictEqual(senderSellOfferReady.session.itemName, 'ENCHANTED DIAMOND');
 
-    sender.send(JSON.stringify({ type: 'transfer_sell_offer_bought', quantity: 128 }));
-    const receiverSellOfferBought = await waitForSocketMessage(receiver);
+    const receiverSellOfferBoughtPromise = waitForSocketMessage(sender);
+    receiver.send(JSON.stringify({ type: 'transfer_sell_offer_bought', quantity: 128 }));
+    const receiverSellOfferBought = await receiverSellOfferBoughtPromise;
     assert.strictEqual(receiverSellOfferBought.type, 'transfer_sell_offer_bought');
     assert.strictEqual(receiverSellOfferBought.quantity, 128);
     assert.strictEqual(receiverSellOfferBought.session.itemName, 'ENCHANTED DIAMOND');
 
-    receiver.send(JSON.stringify({
+    const senderCycleCompletePromise = waitForSocketMessage(receiver);
+    sender.send(JSON.stringify({
       type: 'transfer_cycle_complete',
       quantity: 128,
       before: 1000000,
       after: 18500000,
       delta: 17500000,
     }));
-    const senderCycleComplete = await waitForSocketMessage(sender);
+    const senderCycleComplete = await senderCycleCompletePromise;
     assert.strictEqual(senderCycleComplete.type, 'transfer_cycle_complete');
     assert.strictEqual(senderCycleComplete.quantity, 128);
     assert.strictEqual(senderCycleComplete.before, 1000000);

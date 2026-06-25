@@ -1004,6 +1004,11 @@ function createModConnectionRegistry() {
       return true;
     }
 
+    if (message.type === 'transfer_switch') {
+      switchTransferRoles(source);
+      return true;
+    }
+
     if (message.type === 'transfer_run') {
       runTransfer(source, message);
       return true;
@@ -1099,6 +1104,40 @@ function createModConnectionRegistry() {
     }
     clearTransferTimer(session);
     session.status = 'accepted';
+    sendSocketJson(session.senderSocket, {
+      type: 'transfer_accepted',
+      role: 'sender',
+      session: publicTransferSession(session),
+    });
+    sendSocketJson(session.receiverSocket, {
+      type: 'transfer_accepted',
+      role: 'receiver',
+      session: publicTransferSession(session),
+    });
+  }
+
+  function switchTransferRoles(source) {
+    const session = sessionForSocket(source.socket);
+    if (!session) {
+      sendTransferError(source.socket, 'session_not_found', 'No transfer session is active');
+      return;
+    }
+    if (session.status !== 'accepted') {
+      sendTransferError(source.socket, 'session_not_accepted', 'Transfer session is not accepted yet');
+      return;
+    }
+
+    const previousSenderSocket = session.senderSocket;
+    const previousSenderAccountId = session.senderAccountId;
+    const previousSenderUsername = session.senderUsername;
+
+    session.senderSocket = session.receiverSocket;
+    session.senderAccountId = session.receiverAccountId;
+    session.senderUsername = session.receiverUsername;
+    session.receiverSocket = previousSenderSocket;
+    session.receiverAccountId = previousSenderAccountId;
+    session.receiverUsername = previousSenderUsername;
+
     sendSocketJson(session.senderSocket, {
       type: 'transfer_accepted',
       role: 'sender',
