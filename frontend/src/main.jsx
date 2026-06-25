@@ -1208,6 +1208,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const dashboardSocketRef = useRef(null);
   const screenshotTimeoutsRef = useRef(new Map());
   const autoRefreshAccountRef = useRef(null);
+  const remoteLiveAccountIdRef = useRef(null);
 
   const clearScreenshotTimeout = useCallback((accountId) => {
     const timer = screenshotTimeoutsRef.current.get(Number(accountId));
@@ -1270,6 +1271,10 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
         if (attemptForConnection > 0) {
           setStatusMessage('Dashboard live updates reconnected');
         }
+        const subscribedAccountId = remoteLiveAccountIdRef.current;
+        if (subscribedAccountId) {
+          socket.send(JSON.stringify({ type: 'live_control_subscribe', accountId: subscribedAccountId }));
+        }
         reconnectAttempt = 0;
       };
 
@@ -1281,7 +1286,8 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
             setAccounts(nextAccounts);
             setProxyDrafts((current) => mergeProxyDraftsFromAccounts(nextAccounts, current, activeProxyAccountId));
           } else if (data.type === 'live_control_snapshot') {
-            setLiveControlByAccountId(liveControlStateMap(data.accounts));
+            const snapshot = liveControlStateMap(data.accounts);
+            setLiveControlByAccountId((current) => ({ ...current, ...snapshot }));
           } else if (data.type === 'live_control_update') {
             const incomingState = data.state || {};
             const hasScreenshot = Boolean(incomingState.screenshot?.imageBase64);
@@ -1747,6 +1753,22 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     setStatusMessage('Remote action queued');
     return true;
   }, []);
+
+  useEffect(() => {
+    const accountId = remoteAccount?.id ? Number(remoteAccount.id) : null;
+    const previousAccountId = remoteLiveAccountIdRef.current;
+    remoteLiveAccountIdRef.current = accountId;
+    const socket = dashboardSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return undefined;
+    }
+    if (accountId) {
+      socket.send(JSON.stringify({ type: 'live_control_subscribe', accountId }));
+    } else if (previousAccountId) {
+      socket.send(JSON.stringify({ type: 'live_control_unsubscribe' }));
+    }
+    return undefined;
+  }, [remoteAccount?.id]);
 
   useEffect(() => {
     if (!remoteAccount || (remoteAccountStatus !== 'active' && remoteAccountStatus !== 'hypixel')) {

@@ -100,6 +100,39 @@ async function waitForSocketMessageMatching(socket, predicate, timeoutMs = 1500)
   });
 }
 
+async function waitForNoSocketMessageMatching(socket, predicate, timeoutMs = 150) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.off('message', onMessage);
+      socket.off('error', onError);
+      resolve();
+    }, timeoutMs);
+    const onError = (err) => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+      reject(err);
+    };
+    const onMessage = (data) => {
+      let message;
+      try {
+        message = JSON.parse(data.toString());
+      } catch (err) {
+        clearTimeout(timeout);
+        socket.off('error', onError);
+        reject(err);
+        return;
+      }
+      if (!predicate(message)) return;
+      clearTimeout(timeout);
+      socket.off('error', onError);
+      socket.off('message', onMessage);
+      reject(new Error(`Unexpected matching socket message: ${JSON.stringify(message)}`));
+    };
+    socket.on('message', onMessage);
+    socket.once('error', onError);
+  });
+}
+
 function createTestServer() {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
@@ -971,6 +1004,11 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     assert.strictEqual(authed.type, 'auth_ok');
 
     dashboardSocket.send(JSON.stringify({
+      type: 'live_control_subscribe',
+      accountId: authed.account.id,
+    }));
+
+    dashboardSocket.send(JSON.stringify({
       type: 'request_screenshot',
       accountId: authed.account.id,
     }));
@@ -1088,6 +1126,82 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     assert.strictEqual(cleared.state.screenshot, null);
   } finally {
     closeSocketSilently(dashboardSocket);
+    closeSocketSilently(modSocket);
+    await close(server);
+  }
+});
+
+test('dashboard websocket only streams live control updates for subscribed remote account', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_live_control_subscribe',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000032',
+        name: 'SubscribedLivePlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const cookie = await loginDashboard(baseUrl);
+  const subscribedDashboard = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/dashboard/ws', {
+    headers: { Cookie: cookie },
+  });
+  const idleDashboard = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/dashboard/ws', {
+    headers: { Cookie: cookie },
+  });
+  const modSocket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await Promise.all([
+      waitForSocketOpen(subscribedDashboard),
+      waitForSocketOpen(idleDashboard),
+      waitForSocketOpen(modSocket),
+    ]);
+
+    modSocket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_live_control_subscribe',
+      username: 'SubscribedLivePlayer',
+    }));
+    const authed = await waitForSocketMessageMatching(modSocket, (message) => message.type === 'auth_ok');
+
+    subscribedDashboard.send(JSON.stringify({
+      type: 'live_control_subscribe',
+      accountId: authed.account.id,
+    }));
+
+    const subscribedUpdatePromise = waitForSocketMessageMatching(subscribedDashboard, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+      && message.state?.logs?.[0]?.message === 'Only subscribed dashboard should download this'
+    ));
+    const idleNoUpdatePromise = waitForNoSocketMessageMatching(idleDashboard, (message) => (
+      message.type === 'live_control_update'
+      && message.accountId === authed.account.id
+      && message.state?.logs?.[0]?.message === 'Only subscribed dashboard should download this'
+    ), 300);
+
+    modSocket.send(JSON.stringify({
+      type: 'client_log',
+      level: 'info',
+      source: 'chat',
+      message: 'Only subscribed dashboard should download this',
+    }));
+
+    await subscribedUpdatePromise;
+    await idleNoUpdatePromise;
+  } finally {
+    closeSocketSilently(subscribedDashboard);
+    closeSocketSilently(idleDashboard);
     closeSocketSilently(modSocket);
     await close(server);
   }

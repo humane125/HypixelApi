@@ -634,6 +634,7 @@ function createLiveControlStore() {
   const MAX_LOGS = 100;
 
   function attachDashboard(socket, modConnections) {
+    socket.liveControlSubscriptions = new Set();
     dashboardClients.add(socket);
     socket.on('close', () => dashboardClients.delete(socket));
     socket.on('error', () => dashboardClients.delete(socket));
@@ -649,11 +650,19 @@ function createLiveControlStore() {
     });
     setImmediate(() => sendSocketJson(socket, {
       type: 'live_control_snapshot',
-      accounts: [...accountStates.entries()].map(([accountId, state]) => ({ accountId, state })),
+      accounts: liveControlSnapshotAccounts(socket),
     }));
   }
 
   function handleDashboardMessage(socket, message, modConnections) {
+    if (message.type === 'live_control_subscribe') {
+      handleLiveControlSubscribe(socket, message);
+      return;
+    }
+    if (message.type === 'live_control_unsubscribe') {
+      handleLiveControlUnsubscribe(socket, message);
+      return;
+    }
     if (message.type === 'request_screenshot') {
       handleScreenshotRequest(socket, message, modConnections);
       return;
@@ -661,6 +670,34 @@ function createLiveControlStore() {
     if (message.type === 'send_action') {
       handleRemoteAction(socket, message, modConnections);
     }
+  }
+
+  function handleLiveControlSubscribe(socket, message) {
+    const accountId = Number(message.accountId);
+    if (!Number.isFinite(accountId) || accountId <= 0) {
+      sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_account', message: 'accountId is required' });
+      return;
+    }
+    socket.liveControlSubscriptions = new Set([accountId]);
+    sendSocketJson(socket, {
+      type: 'live_control_update',
+      accountId,
+      state: publicState(accountId),
+      sentAt: new Date().toISOString(),
+    });
+  }
+
+  function handleLiveControlUnsubscribe(socket, message) {
+    if (!socket.liveControlSubscriptions) {
+      socket.liveControlSubscriptions = new Set();
+      return;
+    }
+    const accountId = Number(message.accountId);
+    if (Number.isFinite(accountId) && accountId > 0) {
+      socket.liveControlSubscriptions.delete(accountId);
+      return;
+    }
+    socket.liveControlSubscriptions.clear();
   }
 
   function handleScreenshotRequest(socket, message, modConnections) {
@@ -804,6 +841,17 @@ function createLiveControlStore() {
     };
   }
 
+  function liveControlSnapshotAccounts(socket) {
+    const subscriptions = socket.liveControlSubscriptions || new Set();
+    return [...subscriptions]
+      .filter((accountId) => Number.isFinite(Number(accountId)) && Number(accountId) > 0)
+      .map((accountId) => ({ accountId: Number(accountId), state: publicState(accountId) }));
+  }
+
+  function isSubscribedToLiveControl(socket, accountId) {
+    return socket.liveControlSubscriptions?.has(Number(accountId));
+  }
+
   function broadcast(accountId) {
     const message = {
       type: 'live_control_update',
@@ -814,6 +862,9 @@ function createLiveControlStore() {
     for (const socket of [...dashboardClients]) {
       if (socket.readyState === WEBSOCKET_CLOSING || socket.readyState === WEBSOCKET_CLOSED) {
         dashboardClients.delete(socket);
+        continue;
+      }
+      if (!isSubscribedToLiveControl(socket, accountId)) {
         continue;
       }
       sendSocketJson(socket, message);
