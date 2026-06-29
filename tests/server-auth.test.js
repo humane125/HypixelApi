@@ -253,6 +253,62 @@ test('mod websocket authenticates api keys with mod connect scope and registers 
   }
 });
 
+test('mod websocket returns all registered account usernames on request', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const friend = createUser(db, { username: 'friend', role: 'manager' });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_registered_accounts',
+  });
+  createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Owner alt',
+    minecraftUuid: '00000000-0000-0000-0000-000000000101',
+    minecraftUsername: 'OwnerEndAlt',
+  });
+  createMinecraftAccount(db, {
+    ownerUserId: friend.id,
+    label: 'Friend alt',
+    minecraftUuid: '00000000-0000-0000-0000-000000000102',
+    minecraftUsername: 'FriendEndAlt',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000103',
+        name: 'SocketEndAlt',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_registered_accounts',
+      username: 'SocketEndAlt',
+    }));
+    assert.strictEqual((await waitForSocketMessage(socket)).type, 'auth_ok');
+
+    socket.send(JSON.stringify({ type: 'registered_accounts' }));
+    const listed = await waitForSocketMessage(socket);
+    assert.strictEqual(listed.type, 'registered_accounts');
+    assert.deepStrictEqual(
+      listed.accounts.map((account) => account.minecraftUsername).sort(),
+      ['FriendEndAlt', 'OwnerEndAlt', 'SocketEndAlt']
+    );
+  } finally {
+    socket.close();
+    await close(server);
+  }
+});
+
 test('mod websocket lists connected transfer accounts and accepts a transfer invite', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });

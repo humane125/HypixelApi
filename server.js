@@ -1673,6 +1673,20 @@ function attachModWebSocketServer(server, {
         return;
       }
 
+      if (message.type === 'registered_accounts') {
+        sendSocketJson(socket, {
+          type: 'registered_accounts',
+          accounts: listMinecraftAccounts(db).map((registeredAccount) => ({
+            accountId: registeredAccount.id,
+            minecraftUuid: registeredAccount.minecraft_uuid,
+            minecraftUsername: registeredAccount.minecraft_username,
+            status: registeredAccount.status,
+          })),
+          sentAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       if (message.type === 'active' || message.type === 'hypixel' || message.type === 'offline' || message.type === 'banned') {
         account = recordMinecraftAccountConnectionStatus(db, account.id, message.type, {
           banReason: message.banReason,
