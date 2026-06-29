@@ -1,8 +1,8 @@
 # Test API Handoff
 
-Date: 2026-06-23
+Date: 2026-06-29
 Branch: `master`
-Latest pushed/deployed commit before this handoff: `86acad0 Use account keys for remote control routes`
+Latest pushed/deployed commit before this handoff: `ce37b96 Add registered account list for mod sockets`
 
 ## Current Setup
 
@@ -15,6 +15,37 @@ Latest pushed/deployed commit before this handoff: `86acad0 Use account keys for
 - Old ngrok URL is deprecated: `https://lazy-similarly-reaffirm.ngrok-free.dev`
 
 Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord user IDs, or `node_modules/`.
+
+## Test Later
+
+Test the End lobby collision feature later with real AutoAuction macro instances. The API portion is pushed and deployed to the RDP, but the full behavior needs live mod verification.
+
+Test scenario:
+
+- Start multiple registered accounts across any owner/friend folders.
+- Confirm each mod websocket authenticates.
+- Confirm a mod can request `registered_accounts` and receive all registered Minecraft usernames, including offline/disconnected accounts.
+- Let one account join an End lobby containing another registered account in tablist.
+- Expected mod behavior is handled client-side: the newly arriving account should stop Nebula macro, run `/is`, then re-enable Nebula macro.
+
+## Latest Changes
+
+- Added authenticated mod websocket request/response:
+  - Client sends `{ "type": "registered_accounts" }`.
+  - Server replies with `{ "type": "registered_accounts", "accounts": [...] }`.
+- The account list is built from all registered Minecraft accounts in the dashboard database, across all owners/friends.
+- Response includes:
+  - `accountId`
+  - `minecraftUuid`
+  - `minecraftUsername`
+  - `status`
+- This is separate from `transfer_accounts`; transfer list still only shows connected clients.
+- Added test: `mod websocket returns all registered account usernames on request`.
+- Verified locally with `npm test`.
+- Deployed to RDP:
+  - Copied updated `server.js` to `C:\Hypixel\server.js`.
+  - Restarted scheduled task `HypixelApi`.
+  - Verified `netstat` listening on `0.0.0.0:3000` and dashboard root returned `HTTP 200`.
 
 ## What Happened
 
