@@ -2,7 +2,7 @@
 
 Date: 2026-06-29
 Branch: `master`
-Latest pushed/deployed commit before this handoff: `ce37b96 Add registered account list for mod sockets`
+Latest pushed/deployed commit before this handoff: pending push for account wealth-stats planning commits
 
 ## Current Setup
 
@@ -29,6 +29,33 @@ Test scenario:
 - Expected mod behavior is handled client-side: the newly arriving account should stop Nebula macro, run `/is`, then re-enable Nebula macro.
 
 ## Latest Changes
+
+- Planned the account wealth-stats dashboard feature.
+- Added docs:
+  - `docs/superpowers/specs/2026-06-29-account-wealth-stats-design.md`
+  - `docs/superpowers/plans/2026-06-29-account-wealth-stats.md`
+- Selected UI direction is A+B:
+  - compact wealth stats on each dashboard account card
+  - detailed wealth stats on the account remote-control page
+- Summoning Eye tracking must persist by Minecraft account UUID, not by Prism instance/socket. If Alt Manager switches Account A -> Account B -> Account A, Account A's eye count remains Account A's count.
+- Bazaar pricing should be used for Summoning Eye valuation.
+- Auction tracking rule:
+  - active/unexpired auctions count in `ahListedValue`
+  - if an auction disappears before its end time, treat it as sold, subtract it from expected AH value, and add its value to `estimatedPurse`
+  - if an auction disappears after its end time, treat it as expired/unsold and remove it from expected value without increasing purse
+  - expected total is `estimatedPurse + ahListedValue + heldEyeValue + listedEyeValue`
+- Planned storage additions:
+  - `minecraft_account_stats` for purse, FD kills, eye counts, listed-eye price, and sold auction credit
+  - `minecraft_account_auction_snapshots` for auction UUID, account ID, price, end time, last seen, and state
+- Planned low-bandwidth mod behavior:
+  - send changed stat events only
+  - do not stream full logs/screenshots for this feature
+  - use existing dashboard websocket for account stat updates
+- Planning commits:
+  - `3f869cd Document account wealth stats design`
+  - `f779d44 Clarify wealth stats persistence and auction counting`
+  - `c80af25 Plan account wealth stats implementation`
+  - `75d6d31 Clarify auction sale credit accounting`
 
 - Added authenticated mod websocket request/response:
   - Client sends `{ "type": "registered_accounts" }`.
@@ -249,7 +276,21 @@ Restart API:
 
 ## Next Work
 
-Immediate next slice is mod-side remote control:
+Immediate next slice is account wealth-stats implementation from the committed plan:
+
+1. Add API tests for persisted account stats defaults and updates.
+2. Add API storage helpers in `auth-db.js`.
+3. Add auction snapshot reconciliation:
+   - refresh active auction snapshots while Hypixel API still returns them
+   - disappeared before `end_ms` becomes sold credit in `estimatedPurse`
+   - disappeared after `end_ms` becomes expired/unsold
+4. Add calculation helper for `estimatedPurse`, `ahListedValue`, `heldEyeValue`, `listedEyeValue`, and `expectedCoins`.
+5. Add mod event ingestion for purse, Final Destination kills, Summoning Eye drops, and eye sell/insta-sell clearing.
+6. Add dashboard API/websocket payloads for compact account card stats and detailed remote page stats.
+7. Render the selected A+B UI.
+8. Verify with `npm test` and `npm run build`.
+
+Remote-control backlog:
 
 1. In AutoAuction mod, add websocket handling for API message `request_screenshot`.
 2. Capture the Minecraft framebuffer when `request_screenshot` arrives.
