@@ -68,7 +68,17 @@ CREATE TABLE IF NOT EXISTS minecraft_account_stats (
   summoning_eyes_held INTEGER NOT NULL DEFAULT 0,
   summoning_eyes_listed INTEGER NOT NULL DEFAULT 0,
   summoning_eye_list_price INTEGER NOT NULL DEFAULT 0,
+  sold_auction_credit INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS minecraft_account_auction_snapshots (
+  auction_uuid TEXT PRIMARY KEY,
+  minecraft_account_id INTEGER NOT NULL REFERENCES minecraft_accounts(id) ON DELETE CASCADE,
+  price INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active'
 );
 ```
 
@@ -86,6 +96,7 @@ function getMinecraftAccountStats(db, accountId) {
     summoning_eyes_held: 0,
     summoning_eyes_listed: 0,
     summoning_eye_list_price: 0,
+    sold_auction_credit: 0,
     updated_at: null,
   };
 }
@@ -108,6 +119,22 @@ function moveSummoningEyesToListed(db, accountId, quantity, pricePerEye) {
 function clearListedSummoningEyes(db, accountId, quantity = null) {
   // Clears all listed eyes when quantity is null, otherwise decrements listed count.
   return getMinecraftAccountStats(db, accountId);
+}
+
+function reconcileAuctionSnapshots(db, accounts, activeAuctions, nowMs) {
+  const changedAccountIds = [];
+  for (const activeAuction of activeAuctions) {
+    recordOrRefreshActiveAuctionSnapshot(db, accounts, activeAuction);
+  }
+  for (const missingSnapshot of listActiveSnapshotsMissingFrom(db, activeAuctions)) {
+    const soldBeforeExpiry = nowMs < missingSnapshot.end_ms;
+    if (soldBeforeExpiry) {
+      addSoldAuctionCredit(db, missingSnapshot.minecraft_account_id, missingSnapshot.price);
+    }
+    markAuctionSnapshotClosed(db, missingSnapshot.auction_uuid, soldBeforeExpiry ? 'sold' : 'expired');
+    changedAccountIds.push(missingSnapshot.minecraft_account_id);
+  }
+  return [...new Set(changedAccountIds)];
 }
 ```
 
@@ -140,10 +167,10 @@ git commit -m "Persist account wealth stats"
 const assert = require('assert');
 const { computeAccountWealthStats } = require('../account-stats-core');
 
-test('expected coins include purse active auctions and eye values', () => {
+test('expected coins include estimated purse active auctions and eye values', () => {
   const result = computeAccountWealthStats({
     account: { minecraft_uuid: '00000000-0000-0000-0000-000000000901' },
-    stats: { purse: 10_000_000, summoning_eyes_held: 2, summoning_eyes_listed: 1, summoning_eye_list_price: 1_500_000 },
+    stats: { purse: 10_000_000, sold_auction_credit: 24_999_000, summoning_eyes_held: 2, summoning_eyes_listed: 1, summoning_eye_list_price: 1_500_000 },
     activeAuctions: [
       { auctioneer: '00000000000000000000000000000901', starting_bid: 24_999_000, bin: true, end: Date.now() + 60_000 },
       { auctioneer: 'other', starting_bid: 99_000_000, bin: true, end: Date.now() + 60_000 },
@@ -153,13 +180,14 @@ test('expected coins include purse active auctions and eye values', () => {
   });
 
   assert.strictEqual(result.purse, 10_000_000);
+  assert.strictEqual(result.estimatedPurse, 34_999_000);
   assert.strictEqual(result.ahListedValue, 24_999_000);
   assert.ok(result.heldEyeValue > 0);
   assert.strictEqual(result.listedEyeValue, 1_500_000);
-  assert.strictEqual(result.expectedCoins, result.purse + result.ahListedValue + result.heldEyeValue + result.listedEyeValue);
+  assert.strictEqual(result.expectedCoins, result.estimatedPurse + result.ahListedValue + result.heldEyeValue + result.listedEyeValue);
 });
 
-test('expired or missing auctions do not count as sold coins', () => {
+test('expired auctions do not count as sold coins', () => {
   const result = computeAccountWealthStats({
     account: { minecraft_uuid: '00000000-0000-0000-0000-000000000901' },
     stats: { purse: 10_000_000 },
@@ -194,13 +222,14 @@ function normalizeUuid(value) {
 function computeAccountWealthStats({ account, stats = {}, activeAuctions = [], summoningEyeSellOrderPrice = 0, nowMs = Date.now() }) {
   const uuid = normalizeUuid(account.minecraft_uuid);
   const purse = Number(stats.purse || 0);
+  const estimatedPurse = purse + Number(stats.sold_auction_credit || 0);
   const ahListedValue = activeAuctions
     .filter((auction) => normalizeUuid(auction.auctioneer) === uuid)
     .filter((auction) => !auction.end || Number(auction.end) > nowMs)
     .reduce((sum, auction) => sum + Number(auction.starting_bid || 0), 0);
   const heldEyeValue = Math.floor(Number(stats.summoning_eyes_held || 0) * Number(summoningEyeSellOrderPrice || 0) * 0.9875);
   const listedEyeValue = Number(stats.summoning_eyes_listed || 0) * Number(stats.summoning_eye_list_price || 0);
-  return { purse, ahListedValue, heldEyeValue, listedEyeValue, expectedCoins: purse + ahListedValue + heldEyeValue + listedEyeValue };
+  return { purse, estimatedPurse, ahListedValue, heldEyeValue, listedEyeValue, expectedCoins: estimatedPurse + ahListedValue + heldEyeValue + listedEyeValue };
 }
 ```
 
@@ -444,7 +473,7 @@ git push origin main
 
 Document:
 - eye counts persist across Alt Manager switches and restarts
-- auctions count only while active and unexpired in the latest API cache
+- auctions count while active; disappearing before end time moves value into estimated purse; disappearing after expiry removes value
 - live testing still required for exact Hypixel chat lines
 
 ---
@@ -453,5 +482,5 @@ Document:
 
 - Spec coverage: purse, FD kills, eye persistence, active AH value, Bazaar eye pricing, A+B UI, and low-bandwidth event payloads are covered.
 - No raw logs/screenshots are used for this feature.
-- Auction disappearance/expiry does not imply sold coins; this is explicitly implemented in the calculator.
+- Auction disappearance before expiry becomes sold credit in estimated purse; disappearance after expiry becomes expired/unsold.
 - The plan splits API storage/calculation, mod payloads, and frontend rendering into independently testable tasks.

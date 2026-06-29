@@ -39,19 +39,21 @@ The mod should send only changed values/events, plus a low-frequency heartbeat u
 
 ## API-Computed Data
 The API computes:
+- `estimatedPurse`: latest observed purse plus auction sale credits for auctions that disappeared before expiry.
 - `ahListedValue`: active auction BIN/listing value for the account UUID.
 - `heldEyeValue`: held Summoning Eyes valued at live Bazaar sell-order price minus fees/tax.
 - `listedEyeValue`: Bazaar-listed eye value parsed from sell-order events. If the mod cannot parse the amount or price, use `0` instead of guessing.
-- `expectedCoins = purse + ahListedValue + heldEyeValue + listedEyeValue`.
+- `expectedCoins = estimatedPurse + ahListedValue + heldEyeValue + listedEyeValue`.
 
 ## Hypixel Fetching Strategy
 - The API fetches Hypixel auction pages globally, not per dashboard/account request.
 - Auction data is cached and shared for all accounts.
 - The API filters cached active auctions by `auctioneer` UUID matching registered accounts.
 - Auction value counts only while the auction is still present in the latest successful Hypixel auction search/cache and has not expired.
-- If an auction disappears from the API results, stop counting it toward expected coins. Do not assume it sold.
-- If an auction timer expires and the auction was not bought, stop counting it toward expected coins.
-- Sold auction coins are reflected only when the account's observed purse changes or another explicit mod event reports received coins.
+- If an auction disappears before its end time, treat it as sold: remove it from `ahListedValue` and add the sale value to `estimatedPurse`.
+- If an auction disappears after its end time, treat it as expired/unsold: remove it from `ahListedValue` and do not add it to `estimatedPurse`.
+- If an auction timer expires while it is still unsold, stop counting it toward expected coins.
+- Sold auctions are a bucket move from active AH value into estimated purse, so expected total does not double count them.
 - Bazaar prices are fetched globally and cached, then reused for every account.
 - Refresh intervals should be respectful and bounded. A practical first slice is about 60 seconds for Bazaar data and auction refresh only when Hypixel auction data changes or after a bounded interval.
 
