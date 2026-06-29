@@ -48,11 +48,16 @@ The API computes:
 - The API fetches Hypixel auction pages globally, not per dashboard/account request.
 - Auction data is cached and shared for all accounts.
 - The API filters cached active auctions by `auctioneer` UUID matching registered accounts.
+- Auction value counts only while the auction is still present in the latest successful Hypixel auction search/cache and has not expired.
+- If an auction disappears from the API results, stop counting it toward expected coins. Do not assume it sold.
+- If an auction timer expires and the auction was not bought, stop counting it toward expected coins.
+- Sold auction coins are reflected only when the account's observed purse changes or another explicit mod event reports received coins.
 - Bazaar prices are fetched globally and cached, then reused for every account.
 - Refresh intervals should be respectful and bounded. A practical first slice is about 60 seconds for Bazaar data and auction refresh only when Hypixel auction data changes or after a bounded interval.
 
 ## Persistence
 - Summoning Eye counts and Bazaar-listed eye tracking persist per registered account in SQLite.
+- Summoning Eye counts persist across Minecraft account switches through Alt Manager, game closes, mod reconnects, API restarts, and dashboard reloads.
 - Current purse and armor kills can be latest-observed values only.
 - Historical charts are out of scope for the first slice.
 - Manual reset button is not included in the first slice.
