@@ -1,0 +1,79 @@
+<h2>Where should account stats live?</h2>
+<p class="subtitle">Goal: show purse, expected coins, Final Destination kills, summoning eyes, and AH listed value without sending heavy logs/screenshots.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Dashboard Account Card</div>
+        <div class="mockup-body">
+          <div style="border:1px solid #223049;border-radius:8px;padding:14px;background:#0a1019">
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px">
+              <div style="width:48px;height:48px;background:#222;border-radius:6px"></div>
+              <div>
+                <strong>Rivoh89</strong>
+                <div style="color:#8fa3bf;font-size:12px">Humane • Connected</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+              <div><span style="color:#8fa3bf">Purse</span><br><strong>38.4m</strong></div>
+              <div><span style="color:#8fa3bf">Expected</span><br><strong>122.9m</strong></div>
+              <div><span style="color:#8fa3bf">FD Kills</span><br><strong>25,140</strong></div>
+              <div><span style="color:#8fa3bf">Eyes</span><br><strong>7</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Compact Stats On Cards</h3>
+      <p>Best for scanning many accounts quickly. Details still live on Connect page.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Remote / Connect Page</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+            <div class="placeholder">Purse<br><strong>38.4m</strong></div>
+            <div class="placeholder">AH Listed<br><strong>74.5m</strong></div>
+            <div class="placeholder">Eyes<br><strong>7 / 9.8m</strong></div>
+            <div class="placeholder">Expected<br><strong>122.9m</strong></div>
+          </div>
+          <div class="placeholder">Final Destination pieces: helmet 25,140 • chest 25,138 • legs 25,141 • boots 25,140</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Stats Mainly On Connect Page</h3>
+      <p>Dashboard stays clean. You click Connect to inspect one account deeply.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">New Stats Page</div>
+        <div class="mockup-body">
+          <div class="placeholder" style="margin-bottom:8px">Portfolio total: 841.2m expected • 52 eyes • 18 active auctions</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+            <div class="placeholder">Rivoh89<br>122.9m</div>
+            <div class="placeholder">wlwy_hg<br>97.1m</div>
+            <div class="placeholder">maxim0206<br>143.6m</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Separate Portfolio Stats Page</h3>
+      <p>Best for totals and comparison, but more navigation and more UI work.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Recommended First Slice</h3>
+  <p>Use A + B: compact stats on account cards, detailed breakdown on the Connect page. The mod sends tiny structured stat updates; the API does one shared auction refresh and computes expected value server-side.</p>
+</div>
