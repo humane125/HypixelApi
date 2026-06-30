@@ -20,7 +20,7 @@ function computeAccountWealthStats({
   const ahListedValue = activeAuctions
     .filter((auction) => normalizeUuid(auction.auctioneer) === uuid)
     .filter((auction) => !auction.end || numberValue(auction.end) > nowMs)
-    .reduce((sum, auction) => sum + numberValue(auction.starting_bid), 0);
+    .reduce((sum, auction) => sum + numberValue(auction.starting_bid ?? auction.price), 0);
   const heldEyeValue = Math.floor(numberValue(stats.summoning_eyes_held) * numberValue(summoningEyeSellOrderPrice) * 0.9875);
   const listedEyeValue = numberValue(stats.summoning_eyes_listed) * numberValue(stats.summoning_eye_list_price);
   const finalDestinationKills = {

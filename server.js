@@ -32,6 +32,7 @@ const {
   createMinecraftAccount,
   listMinecraftAccounts,
   upsertMinecraftAccountFromMod,
+  getMinecraftAccountStats,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
@@ -41,10 +42,12 @@ const {
   deleteMinecraftAccount,
   writeAuditLog,
 } = require('./auth-db');
+const { computeAccountWealthStats } = require('./account-stats-core');
 
 const DEFAULT_PORT = 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const HYPIXEL_AUCTIONS_URL = 'https://api.hypixel.net/v2/skyblock/auctions';
+const HYPIXEL_BAZAAR_URL = 'https://api.hypixel.net/v2/skyblock/bazaar';
 const DEFAULT_LOGIN_RATE_LIMIT = {
   maxFailures: 5,
   windowMs: 15 * 60 * 1000,
@@ -272,6 +275,48 @@ function createAuctionIndexService(options = {}) {
     refresh,
     getStatus,
     getItems: () => state.indexedAuctions,
+  };
+}
+
+function createBazaarPriceService({ fetchImpl = global.fetch, ttlMs = 60_000 } = {}) {
+  const state = {
+    summoningEyeSellOrderPrice: 0,
+    refreshedAt: 0,
+    refreshPromise: null,
+  };
+
+  async function refresh() {
+    if (state.refreshPromise) return state.refreshPromise;
+    state.refreshPromise = (async () => {
+      const response = await fetchWithRetry(fetchImpl, HYPIXEL_BAZAAR_URL, {
+        headers: { 'User-Agent': 'Hypixel-Auction-Search-Service/2.0' },
+      }, 2, 200);
+      const data = await response.json();
+      const product = data?.products?.SUMMONING_EYE;
+      const price = Number(product?.quick_status?.buyPrice || 0);
+      if (Number.isFinite(price) && price > 0) {
+        state.summoningEyeSellOrderPrice = price;
+        state.refreshedAt = Date.now();
+      }
+      return state.summoningEyeSellOrderPrice;
+    })();
+    try {
+      return await state.refreshPromise;
+    } finally {
+      state.refreshPromise = null;
+    }
+  }
+
+  function ensureFresh() {
+    if (!state.refreshedAt || Date.now() - state.refreshedAt > ttlMs) {
+      refresh().catch(() => {});
+    }
+  }
+
+  return {
+    refresh,
+    ensureFresh,
+    getCachedSummoningEyeSellOrderPrice: () => state.summoningEyeSellOrderPrice,
   };
 }
 
@@ -585,17 +630,18 @@ function sendSocketJson(socket, payload) {
   }
 }
 
-function createDashboardAccountBroadcaster({ db, heartbeatWindowMs }) {
+function createDashboardAccountBroadcaster({ db, heartbeatWindowMs, enrichAccounts = (accounts) => accounts }) {
   const clients = new Set();
   let getLiveAccountStatuses = () => [];
 
   function accountsMessage() {
+    const accounts = applyLiveAccountStatuses(
+      listMinecraftAccounts(db, { heartbeatWindowMs }),
+      getLiveAccountStatuses()
+    );
     return {
       type: 'accounts',
-      accounts: applyLiveAccountStatuses(
-        listMinecraftAccounts(db, { heartbeatWindowMs }),
-        getLiveAccountStatuses()
-      ),
+      accounts: enrichAccounts(accounts),
       sentAt: new Date().toISOString(),
     };
   }
@@ -1742,6 +1788,7 @@ function createAppServer(options = {}) {
   const publicDir = options.publicDir || PUBLIC_DIR;
   const fetchImpl = options.fetchImpl || global.fetch;
   const auctionIndex = options.auctionIndex || createAuctionIndexService(options);
+  const bazaarPriceService = options.bazaarPriceService || createBazaarPriceService({ fetchImpl });
   const db = options.db === false
     ? null
     : (options.db || createDatabase(options.databasePath || process.env.DATABASE_PATH || path.join(__dirname, 'data', 'app.db')));
@@ -1764,14 +1811,33 @@ function createAppServer(options = {}) {
 
   const accountHeartbeatWindowMs = options.accountHeartbeatWindowMs || DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS;
   let getLiveAccountStatuses = () => [];
+  function enrichAccountsWithWealthStats(accounts) {
+    if (!db) return accounts;
+    bazaarPriceService.ensureFresh?.();
+    const activeAuctions = typeof auctionIndex.getItems === 'function' ? auctionIndex.getItems() : [];
+    const summoningEyeSellOrderPrice = bazaarPriceService.getCachedSummoningEyeSellOrderPrice?.() || 0;
+    return accounts.map((account) => ({
+      ...account,
+      wealthStats: computeAccountWealthStats({
+        account,
+        stats: getMinecraftAccountStats(db, account.id),
+        activeAuctions,
+        summoningEyeSellOrderPrice,
+      }),
+    }));
+  }
   function listDashboardMinecraftAccounts() {
-    return applyLiveAccountStatuses(
+    return enrichAccountsWithWealthStats(applyLiveAccountStatuses(
       listMinecraftAccounts(db, { heartbeatWindowMs: accountHeartbeatWindowMs }),
       getLiveAccountStatuses()
-    );
+    ));
   }
   const dashboardAccounts = db
-    ? createDashboardAccountBroadcaster({ db, heartbeatWindowMs: accountHeartbeatWindowMs })
+    ? createDashboardAccountBroadcaster({
+      db,
+      heartbeatWindowMs: accountHeartbeatWindowMs,
+      enrichAccounts: enrichAccountsWithWealthStats,
+    })
     : null;
   const server = http.createServer(async (req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);

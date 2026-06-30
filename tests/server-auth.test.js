@@ -11,6 +11,7 @@ const {
   setUserPassword,
   createMinecraftAccount,
   updateMinecraftAccountProxy,
+  upsertMinecraftAccountStats,
 } = require('../auth-db');
 const { createAppServer, createAuctionIndexService } = require('../server');
 
@@ -1497,6 +1498,70 @@ test('dashboard account endpoints create and list registered minecraft accounts'
     const body = await listed.json();
     assert.strictEqual(body.accounts.length, 1);
     assert.strictEqual(body.accounts[0].minecraft_username, 'PlayerOne');
+  } finally {
+    await close(server);
+  }
+});
+
+test('dashboard account lists include computed wealth stats', async () => {
+  const nowMs = Date.now();
+  const auctionIndex = {
+    ensureFresh: async () => ({ source: 'cache', status: { ready: true } }),
+    refresh: async () => ({ source: 'cache', status: { ready: true } }),
+    getStatus: () => ({ ready: true }),
+    getItems: () => [
+      {
+        auctioneer: '00000000000000000000000000000901',
+        starting_bid: 24_999_000,
+        bin: true,
+        end: nowMs + 60_000,
+      },
+      {
+        auctioneer: '00000000000000000000000000000999',
+        starting_bid: 99_999_000,
+        bin: true,
+        end: nowMs + 60_000,
+      },
+    ],
+  };
+  const { db, owner, server } = createTestServerWithOptions({
+    auctionIndex,
+    bazaarPriceService: {
+      getCachedSummoningEyeSellOrderPrice: () => 1_400_000,
+    },
+  });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'End macro',
+    minecraftUuid: '00000000-0000-0000-0000-000000000901',
+    minecraftUsername: 'EndMacroOne',
+  });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 10_000_000,
+    summoningEyesHeld: 2,
+    fdHelmetKills: 25_000,
+    fdChestplateKills: 25_001,
+    fdLeggingsKills: 25_002,
+    fdBootsKills: 25_003,
+  });
+
+  const baseUrl = await listen(server);
+  try {
+    const listed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: await loginDashboard(baseUrl) },
+    });
+    assert.strictEqual(listed.status, 200);
+    const body = await listed.json();
+    const listedAccount = body.accounts.find((row) => row.minecraft_username === 'EndMacroOne');
+    assert.ok(listedAccount.wealthStats);
+    assert.strictEqual(listedAccount.wealthStats.purse, 10_000_000);
+    assert.strictEqual(listedAccount.wealthStats.ahListedValue, 24_999_000);
+    assert.ok(listedAccount.wealthStats.heldEyeValue > 0);
+    assert.strictEqual(listedAccount.wealthStats.finalDestinationKills.minimum, 25_000);
+    assert.strictEqual(
+      listedAccount.wealthStats.expectedCoins,
+      listedAccount.wealthStats.estimatedPurse + listedAccount.wealthStats.ahListedValue + listedAccount.wealthStats.heldEyeValue + listedAccount.wealthStats.listedEyeValue
+    );
   } finally {
     await close(server);
   }
