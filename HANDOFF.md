@@ -1,8 +1,8 @@
 # Test API Handoff
 
-Date: 2026-06-29
+Date: 2026-06-30
 Branch: `master`
-Latest pushed/deployed commit before this handoff: pending push for account wealth-stats planning commits
+Latest local commit before this handoff: `edb7a31 Render account wealth stats`
 
 ## Current Setup
 
@@ -18,6 +18,18 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
 
 ## Test Later
 
+Test the account wealth dashboard with real macro accounts after deploying API/dashboard and copying the latest AutoAuction jar:
+
+- Open `/` and confirm each account card shows compact wealth stats: current estimate, expected total, held eyes, and lowest Final Destination armor kills.
+- Open `/remote/<minecraft_uuid_or_username>` and confirm the detailed Account Wealth panel shows purse, AH listings, held/listed eye values, expected total, and per-piece Final Destination kills.
+- Drop a Summoning Eye and confirm the account's held-eye count increments for that Minecraft account UUID.
+- Switch accounts through Alt Manager, then switch back. The original account's eye count should still belong to that original Minecraft UUID.
+- Create a Summoning Eye sell order and confirm held eyes move to listed eyes with the configured listed price.
+- Instant-sell or claim sold eyes and confirm listed/held counts reduce.
+- Refresh the auction index after an armor auction disappears:
+  - before its end time: value should move into `estimatedPurse`
+  - after its end time: value should disappear from expected value without increasing purse
+
 Test the End lobby collision feature later with real AutoAuction macro instances. The API portion is pushed and deployed to the RDP, but the full behavior needs live mod verification.
 
 Test scenario:
@@ -29,6 +41,28 @@ Test scenario:
 - Expected mod behavior is handled client-side: the newly arriving account should stop Nebula macro, run `/is`, then re-enable Nebula macro.
 
 ## Latest Changes
+
+- Implemented account wealth stats API/dashboard slice:
+  - `minecraft_account_stats` persists purse, Final Destination armor kills, held/listed Summoning Eyes, listed-eye price, and sold auction credit.
+  - `minecraft_account_auction_snapshots` tracks active registered-account auctions by auction UUID.
+  - Dashboard account responses now include `wealthStats`.
+  - Dashboard websocket account refreshes include `wealthStats`.
+  - Mod websocket accepts compact `account_stats` and `summoning_eye_event` messages.
+  - Bazaar `SUMMONING_EYE` price is cached and used for held-eye valuation.
+  - Auction disappearance reconciliation is now wired:
+    - active/unexpired auction disappears before end time = sold, credit goes to `estimatedPurse`
+    - disappears after end time = expired/unsold, no purse credit
+  - Dashboard account cards render compact wealth stats.
+  - Remote-control pages render the detailed Account Wealth panel.
+- Account wealth commits:
+  - `d629945 Persist account wealth stats`
+  - `38364fa Compute account wealth stats`
+  - `1802db3 Expose account wealth stats in dashboard accounts`
+  - `6753ef0 Ingest mod account wealth stat events`
+  - `edb7a31 Render account wealth stats`
+- Verified locally:
+  - `npm test`
+  - `npm run build`
 
 - Planned the account wealth-stats dashboard feature.
 - Added docs:
