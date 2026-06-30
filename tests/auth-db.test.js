@@ -23,6 +23,10 @@ const {
   listDashboardUsers,
   updateUserRole,
   deleteDashboardUser,
+  upsertMinecraftAccountStats,
+  incrementSummoningEyes,
+  moveSummoningEyesToListed,
+  getMinecraftAccountStats,
 } = require('../auth-db');
 
 function test(name, fn) {
@@ -60,6 +64,27 @@ test('api keys are stored hashed and authenticate with scopes', () => {
   assert.strictEqual(auth.user.username, 'owner');
   assert.strictEqual(auth.user.role, 'owner');
   assert.deepStrictEqual(auth.apiKey.scopes, ['admin', 'auction:read', 'accounts:write']);
+});
+
+test('minecraft account wealth stats persist summoning eye counts', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'End macro',
+    minecraftUuid: '00000000-0000-0000-0000-000000000901',
+    minecraftUsername: 'EndMacroOne',
+  });
+
+  upsertMinecraftAccountStats(db, account.id, { purse: 12_000_000, summoningEyesHeld: 3 });
+  incrementSummoningEyes(db, account.id, 2);
+  moveSummoningEyesToListed(db, account.id, 4, 1_200_000);
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.purse, 12_000_000);
+  assert.strictEqual(stats.summoning_eyes_held, 1);
+  assert.strictEqual(stats.summoning_eyes_listed, 4);
+  assert.strictEqual(stats.summoning_eye_list_price, 1_200_000);
 });
 
 test('revoked and invalid api keys cannot authenticate', () => {

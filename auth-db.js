@@ -111,6 +111,34 @@ function migrateDatabase(db) {
 
     CREATE INDEX IF NOT EXISTS idx_minecraft_accounts_status ON minecraft_accounts(status);
 
+    CREATE TABLE IF NOT EXISTS minecraft_account_stats (
+      minecraft_account_id INTEGER PRIMARY KEY REFERENCES minecraft_accounts(id) ON DELETE CASCADE,
+      purse INTEGER,
+      fd_helmet_kills INTEGER,
+      fd_chestplate_kills INTEGER,
+      fd_leggings_kills INTEGER,
+      fd_boots_kills INTEGER,
+      summoning_eyes_held INTEGER NOT NULL DEFAULT 0,
+      summoning_eyes_listed INTEGER NOT NULL DEFAULT 0,
+      summoning_eye_list_price INTEGER NOT NULL DEFAULT 0,
+      sold_auction_credit INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS minecraft_account_auction_snapshots (
+      auction_uuid TEXT PRIMARY KEY,
+      minecraft_account_id INTEGER NOT NULL REFERENCES minecraft_accounts(id) ON DELETE CASCADE,
+      price INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'active'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_minecraft_account_auction_snapshots_account
+      ON minecraft_account_auction_snapshots(minecraft_account_id);
+    CREATE INDEX IF NOT EXISTS idx_minecraft_account_auction_snapshots_state
+      ON minecraft_account_auction_snapshots(state);
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -606,6 +634,146 @@ function publicMinecraftAccount(account) {
   };
 }
 
+function safeNonNegativeInteger(value, fallback = 0) {
+  if (value == null || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.floor(number));
+}
+
+function nullableNonNegativeInteger(value) {
+  if (value == null || value === '') return null;
+  return safeNonNegativeInteger(value, 0);
+}
+
+function defaultMinecraftAccountStats(accountId) {
+  return {
+    minecraft_account_id: accountId,
+    purse: null,
+    fd_helmet_kills: null,
+    fd_chestplate_kills: null,
+    fd_leggings_kills: null,
+    fd_boots_kills: null,
+    summoning_eyes_held: 0,
+    summoning_eyes_listed: 0,
+    summoning_eye_list_price: 0,
+    sold_auction_credit: 0,
+    updated_at: null,
+  };
+}
+
+function ensureMinecraftAccountStatsRow(db, accountId) {
+  db.prepare(`
+    INSERT INTO minecraft_account_stats (minecraft_account_id, updated_at)
+    VALUES (?, ?)
+    ON CONFLICT(minecraft_account_id) DO NOTHING
+  `).run(accountId, nowIso());
+}
+
+function getMinecraftAccountStats(db, accountId) {
+  const row = db.prepare('SELECT * FROM minecraft_account_stats WHERE minecraft_account_id = ?').get(accountId);
+  return row || defaultMinecraftAccountStats(accountId);
+}
+
+function upsertMinecraftAccountStats(db, accountId, patch = {}) {
+  const existing = getMinecraftAccountStats(db, accountId);
+  const next = {
+    purse: Object.prototype.hasOwnProperty.call(patch, 'purse')
+      ? nullableNonNegativeInteger(patch.purse)
+      : existing.purse,
+    fd_helmet_kills: Object.prototype.hasOwnProperty.call(patch, 'fdHelmetKills')
+      ? nullableNonNegativeInteger(patch.fdHelmetKills)
+      : existing.fd_helmet_kills,
+    fd_chestplate_kills: Object.prototype.hasOwnProperty.call(patch, 'fdChestplateKills')
+      ? nullableNonNegativeInteger(patch.fdChestplateKills)
+      : existing.fd_chestplate_kills,
+    fd_leggings_kills: Object.prototype.hasOwnProperty.call(patch, 'fdLeggingsKills')
+      ? nullableNonNegativeInteger(patch.fdLeggingsKills)
+      : existing.fd_leggings_kills,
+    fd_boots_kills: Object.prototype.hasOwnProperty.call(patch, 'fdBootsKills')
+      ? nullableNonNegativeInteger(patch.fdBootsKills)
+      : existing.fd_boots_kills,
+    summoning_eyes_held: Object.prototype.hasOwnProperty.call(patch, 'summoningEyesHeld')
+      ? safeNonNegativeInteger(patch.summoningEyesHeld)
+      : existing.summoning_eyes_held,
+    updated_at: nowIso(),
+  };
+  db.prepare(`
+    INSERT INTO minecraft_account_stats (
+      minecraft_account_id,
+      purse,
+      fd_helmet_kills,
+      fd_chestplate_kills,
+      fd_leggings_kills,
+      fd_boots_kills,
+      summoning_eyes_held,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(minecraft_account_id) DO UPDATE SET
+      purse = excluded.purse,
+      fd_helmet_kills = excluded.fd_helmet_kills,
+      fd_chestplate_kills = excluded.fd_chestplate_kills,
+      fd_leggings_kills = excluded.fd_leggings_kills,
+      fd_boots_kills = excluded.fd_boots_kills,
+      summoning_eyes_held = excluded.summoning_eyes_held,
+      updated_at = excluded.updated_at
+  `).run(
+    accountId,
+    next.purse,
+    next.fd_helmet_kills,
+    next.fd_chestplate_kills,
+    next.fd_leggings_kills,
+    next.fd_boots_kills,
+    next.summoning_eyes_held,
+    next.updated_at
+  );
+  return getMinecraftAccountStats(db, accountId);
+}
+
+function incrementSummoningEyes(db, accountId, delta) {
+  const existing = getMinecraftAccountStats(db, accountId);
+  const nextHeld = Math.max(0, safeNonNegativeInteger(existing.summoning_eyes_held) + Math.floor(Number(delta || 0)));
+  ensureMinecraftAccountStatsRow(db, accountId);
+  db.prepare(`
+    UPDATE minecraft_account_stats
+    SET summoning_eyes_held = ?, updated_at = ?
+    WHERE minecraft_account_id = ?
+  `).run(nextHeld, nowIso(), accountId);
+  return getMinecraftAccountStats(db, accountId);
+}
+
+function moveSummoningEyesToListed(db, accountId, quantity, pricePerEye) {
+  const existing = getMinecraftAccountStats(db, accountId);
+  const moveQuantity = Math.min(safeNonNegativeInteger(quantity), safeNonNegativeInteger(existing.summoning_eyes_held));
+  const nextHeld = safeNonNegativeInteger(existing.summoning_eyes_held) - moveQuantity;
+  const nextListed = safeNonNegativeInteger(existing.summoning_eyes_listed) + moveQuantity;
+  ensureMinecraftAccountStatsRow(db, accountId);
+  db.prepare(`
+    UPDATE minecraft_account_stats
+    SET summoning_eyes_held = ?,
+        summoning_eyes_listed = ?,
+        summoning_eye_list_price = ?,
+        updated_at = ?
+    WHERE minecraft_account_id = ?
+  `).run(nextHeld, nextListed, safeNonNegativeInteger(pricePerEye), nowIso(), accountId);
+  return getMinecraftAccountStats(db, accountId);
+}
+
+function clearListedSummoningEyes(db, accountId, quantity = null) {
+  const existing = getMinecraftAccountStats(db, accountId);
+  const nextListed = quantity == null
+    ? 0
+    : Math.max(0, safeNonNegativeInteger(existing.summoning_eyes_listed) - safeNonNegativeInteger(quantity));
+  ensureMinecraftAccountStatsRow(db, accountId);
+  db.prepare(`
+    UPDATE minecraft_account_stats
+    SET summoning_eyes_listed = ?, updated_at = ?
+    WHERE minecraft_account_id = ?
+  `).run(nextListed, nowIso(), accountId);
+  return getMinecraftAccountStats(db, accountId);
+}
+
 function normalizeProxyType(value) {
   const type = String(value || 'SOCKS5').trim().toUpperCase();
   if (!['SOCKS5', 'SOCKS4', 'HTTP'].includes(type)) {
@@ -999,6 +1167,11 @@ module.exports = {
   createMinecraftAccount,
   listMinecraftAccounts,
   upsertMinecraftAccountFromMod,
+  getMinecraftAccountStats,
+  upsertMinecraftAccountStats,
+  incrementSummoningEyes,
+  moveSummoningEyesToListed,
+  clearListedSummoningEyes,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
