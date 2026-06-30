@@ -7,9 +7,7 @@ import {
   Camera,
   ChevronLeft,
   Clock,
-  Coins,
   Copy,
-  Eye,
   ExternalLink,
   FileText,
   Gavel,
@@ -26,13 +24,18 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  Shirt,
   Trash2,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
 import './styles.css';
+import fdBootsIcon from './assets/final-destination/fd-boots.png';
+import fdChestplateIcon from './assets/final-destination/fd-chestplate.png';
+import fdHelmetIcon from './assets/final-destination/fd-helmet.png';
+import fdLeggingsIcon from './assets/final-destination/fd-leggings.png';
+import coinGoldIcon from './assets/wealth/coin-gold.png';
+import summoningEyeIcon from './assets/wealth/summoning-eye.png';
 import { mergeProxyDraftsFromAccounts, proxyDraftFromAccount, proxyDraftsFromAccounts } from './proxyDrafts.mjs';
 
 const TOKEN_STORAGE_KEY = 'auctionApiToken';
@@ -99,6 +102,13 @@ const defaultUserForm = {
   username: '',
   password: '',
   role: 'viewer',
+};
+
+const finalDestinationIcons = {
+  helmet: fdHelmetIcon,
+  chestplate: fdChestplateIcon,
+  leggings: fdLeggingsIcon,
+  boots: fdBootsIcon,
 };
 
 function authHeaders(token) {
@@ -954,24 +964,21 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
 
 function AccountWealthStrip({ stats }) {
   const fdMinimum = stats?.finalDestinationKills?.minimum;
+  const items = [
+    { label: 'Current', value: formatCoins(stats?.estimatedPurse), icon: coinGoldIcon },
+    { label: 'Expected', value: formatCoins(stats?.expectedCoins), icon: coinGoldIcon },
+    { label: 'Eyes', value: formatStatNumber(stats?.summoningEyesHeld), icon: summoningEyeIcon },
+    { label: 'FD', value: fdMinimum == null ? '-' : formatStatNumber(fdMinimum), icon: fdHelmetIcon },
+  ];
   return (
     <div className="account-wealth-strip" aria-label="Account wealth summary">
-      <div>
-        <span>Current</span>
-        <strong>{formatCoins(stats?.estimatedPurse)}</strong>
-      </div>
-      <div>
-        <span>Expected</span>
-        <strong>{formatCoins(stats?.expectedCoins)}</strong>
-      </div>
-      <div>
-        <span>Eyes</span>
-        <strong>{formatStatNumber(stats?.summoningEyesHeld)}</strong>
-      </div>
-      <div>
-        <span>FD</span>
-        <strong>{fdMinimum == null ? '-' : formatStatNumber(fdMinimum)}</strong>
-      </div>
+      {items.map((item) => (
+        <div key={item.label}>
+          <img className="wealth-icon" src={item.icon} alt="" aria-hidden="true" />
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
     </div>
   );
 }
@@ -987,16 +994,16 @@ function RemoteWealthPanel({ stats }) {
     ['Expected total', stats?.expectedCoins],
   ];
   const fdRows = [
-    ['Helmet', finalDestinationKills.helmet],
-    ['Chestplate', finalDestinationKills.chestplate],
-    ['Leggings', finalDestinationKills.leggings],
-    ['Boots', finalDestinationKills.boots],
+    ['Helmet', finalDestinationKills.helmet, finalDestinationIcons.helmet],
+    ['Chestplate', finalDestinationKills.chestplate, finalDestinationIcons.chestplate],
+    ['Leggings', finalDestinationKills.leggings, finalDestinationIcons.leggings],
+    ['Boots', finalDestinationKills.boots, finalDestinationIcons.boots],
   ];
 
   return (
     <section className="remote-panel remote-wealth-panel">
       <div className="remote-section-title">
-        <div><Coins size={18} aria-hidden="true" /></div>
+        <div><img className="wealth-title-icon" src={coinGoldIcon} alt="" aria-hidden="true" /></div>
         <div>
           <h3>Account Wealth</h3>
           <p className="muted">Purse, active auctions, summoning eyes, and Final Destination armor progress.</p>
@@ -1005,31 +1012,31 @@ function RemoteWealthPanel({ stats }) {
       <div className="remote-wealth-grid">
         <div className="remote-wealth-group">
           <div className="remote-wealth-group-head">
-            <Coins size={16} aria-hidden="true" />
+            <img className="wealth-icon" src={coinGoldIcon} alt="" aria-hidden="true" />
             <span>Coins</span>
           </div>
           {moneyRows.map(([label, value]) => (
             <div className="remote-wealth-row" key={label}>
-              <span>{label}</span>
+              <span><img className="wealth-row-icon" src={coinGoldIcon} alt="" aria-hidden="true" />{label}</span>
               <strong>{formatCoins(value)}</strong>
             </div>
           ))}
         </div>
         <div className="remote-wealth-group">
           <div className="remote-wealth-group-head">
-            <Eye size={16} aria-hidden="true" />
+            <img className="wealth-icon" src={summoningEyeIcon} alt="" aria-hidden="true" />
             <span>Summoning Eyes</span>
           </div>
           <div className="remote-wealth-row">
-            <span>Held</span>
+            <span><img className="wealth-row-icon" src={summoningEyeIcon} alt="" aria-hidden="true" />Held</span>
             <strong>{formatStatNumber(stats?.summoningEyesHeld)}</strong>
           </div>
           <div className="remote-wealth-row">
-            <span>Listed</span>
+            <span><img className="wealth-row-icon" src={summoningEyeIcon} alt="" aria-hidden="true" />Listed</span>
             <strong>{formatStatNumber(stats?.summoningEyesListed)}</strong>
           </div>
           <div className="remote-wealth-row">
-            <span>Listed price</span>
+            <span><img className="wealth-row-icon" src={coinGoldIcon} alt="" aria-hidden="true" />Listed price</span>
             <strong>{formatCoins(stats?.summoningEyeListPrice)}</strong>
           </div>
           <div className="remote-wealth-row">
@@ -1039,12 +1046,12 @@ function RemoteWealthPanel({ stats }) {
         </div>
         <div className="remote-wealth-group">
           <div className="remote-wealth-group-head">
-            <Shirt size={16} aria-hidden="true" />
+            <img className="wealth-icon" src={fdHelmetIcon} alt="" aria-hidden="true" />
             <span>Final Destination</span>
           </div>
-          {fdRows.map(([label, value]) => (
+          {fdRows.map(([label, value, icon]) => (
             <div className="remote-wealth-row" key={label}>
-              <span>{label}</span>
+              <span><img className="wealth-row-icon" src={icon} alt="" aria-hidden="true" />{label}</span>
               <strong>{value == null ? '-' : formatStatNumber(value)}</strong>
             </div>
           ))}

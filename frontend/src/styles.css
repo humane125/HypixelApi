@@ -930,11 +930,14 @@ tbody tr:hover {
 
 .account-wealth-strip div {
   display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
   gap: 3px;
   min-width: 0;
+  align-items: center;
 }
 
 .account-wealth-strip span {
+  min-width: 0;
   color: #98a8ba;
   font-size: 0.66rem;
   font-weight: 800;
@@ -942,12 +945,33 @@ tbody tr:hover {
 }
 
 .account-wealth-strip strong {
+  grid-column: 2;
   overflow: hidden;
   color: var(--text);
   font-size: 0.86rem;
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wealth-icon,
+.wealth-row-icon,
+.wealth-title-icon {
+  display: block;
+  flex: 0 0 auto;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.wealth-icon {
+  width: 24px;
+  height: 24px;
+  grid-row: span 2;
+}
+
+.wealth-title-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .account-controls {
@@ -1649,21 +1673,27 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
-.remote-wealth-group-head svg {
-  color: var(--accent);
-}
-
 .remote-wealth-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   border-top: 1px solid rgba(98, 119, 145, 0.13);
   padding-top: 9px;
 }
 
 .remote-wealth-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.wealth-row-icon {
+  width: 20px;
+  height: 20px;
 }
 
 .remote-wealth-row strong {
