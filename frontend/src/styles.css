@@ -918,6 +918,38 @@ tbody tr:hover {
   font-size: 0.76rem;
 }
 
+.account-wealth-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(98, 119, 145, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.account-wealth-strip div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-wealth-strip span {
+  color: #98a8ba;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.account-wealth-strip strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-controls {
   display: grid;
   grid-template-columns: 1fr;
@@ -1586,6 +1618,60 @@ tbody tr:hover {
   color: rgba(255, 255, 255, 0.78);
 }
 
+.remote-wealth-panel {
+  padding: 18px;
+}
+
+.remote-wealth-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.remote-wealth-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(98, 119, 145, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.remote-wealth-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b8c3d2;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.remote-wealth-group-head svg {
+  color: var(--accent);
+}
+
+.remote-wealth-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid rgba(98, 119, 145, 0.13);
+  padding-top: 9px;
+}
+
+.remote-wealth-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.remote-wealth-row strong {
+  color: var(--text);
+  font-size: 0.86rem;
+  text-align: right;
+}
+
 .remote-log-panel {
   display: grid;
 }
@@ -1811,6 +1897,10 @@ tbody tr:hover {
   }
 
   .remote-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-wealth-grid {
     grid-template-columns: 1fr;
   }
 

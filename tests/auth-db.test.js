@@ -27,6 +27,7 @@ const {
   incrementSummoningEyes,
   moveSummoningEyesToListed,
   getMinecraftAccountStats,
+  reconcileMinecraftAccountAuctionSnapshots,
 } = require('../auth-db');
 
 function test(name, fn) {
@@ -85,6 +86,52 @@ test('minecraft account wealth stats persist summoning eye counts', () => {
   assert.strictEqual(stats.summoning_eyes_held, 1);
   assert.strictEqual(stats.summoning_eyes_listed, 4);
   assert.strictEqual(stats.summoning_eye_list_price, 1_200_000);
+});
+
+test('minecraft account auction snapshots credit sold auctions only before expiry', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const soldAccount = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Sold auction account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000911',
+    minecraftUsername: 'SoldAuctionOne',
+  });
+  const expiredAccount = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Expired auction account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000912',
+    minecraftUsername: 'ExpiredAuctionOne',
+  });
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [soldAccount, expiredAccount], [
+    {
+      uuid: 'sold-auction',
+      auctioneer: '00000000000000000000000000000911',
+      starting_bid: 24_999_000,
+      end: 2_000,
+    },
+    {
+      uuid: 'expired-auction',
+      auctioneer: '00000000000000000000000000000912',
+      starting_bid: 10_000_000,
+      end: 1_500,
+    },
+  ], { nowMs: 1_000 });
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [soldAccount, expiredAccount], [
+    {
+      uuid: 'expired-auction',
+      auctioneer: '00000000000000000000000000000912',
+      starting_bid: 10_000_000,
+      end: 1_500,
+    },
+  ], { nowMs: 1_250 });
+  assert.strictEqual(getMinecraftAccountStats(db, soldAccount.id).sold_auction_credit, 24_999_000);
+  assert.strictEqual(getMinecraftAccountStats(db, expiredAccount.id).sold_auction_credit, 0);
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [soldAccount, expiredAccount], [], { nowMs: 2_000 });
+  assert.strictEqual(getMinecraftAccountStats(db, expiredAccount.id).sold_auction_credit, 0);
 });
 
 test('revoked and invalid api keys cannot authenticate', () => {

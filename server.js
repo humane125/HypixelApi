@@ -37,6 +37,7 @@ const {
   incrementSummoningEyes,
   moveSummoningEyesToListed,
   clearListedSummoningEyes,
+  reconcileMinecraftAccountAuctionSnapshots,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
@@ -1888,6 +1889,10 @@ function createAppServer(options = {}) {
     if (!db) return accounts;
     bazaarPriceService.ensureFresh?.();
     const activeAuctions = typeof auctionIndex.getItems === 'function' ? auctionIndex.getItems() : [];
+    const auctionStatus = typeof auctionIndex.getStatus === 'function' ? auctionIndex.getStatus() : null;
+    if (auctionStatus?.ready) {
+      reconcileMinecraftAccountAuctionSnapshots(db, accounts, activeAuctions);
+    }
     const summoningEyeSellOrderPrice = bazaarPriceService.getCachedSummoningEyeSellOrderPrice?.() || 0;
     return accounts.map((account) => ({
       ...account,

@@ -7,7 +7,9 @@ import {
   Camera,
   ChevronLeft,
   Clock,
+  Coins,
   Copy,
+  Eye,
   ExternalLink,
   FileText,
   Gavel,
@@ -24,6 +26,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  Shirt,
   Trash2,
   UserPlus,
   Users,
@@ -137,6 +140,22 @@ function formatPrice(price) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
   return formatNumber(value);
+}
+
+function formatCoins(value, fallback = '0') {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return formatPrice(Math.max(0, Math.floor(number)));
+}
+
+function formatStatNumber(value, fallback = '-') {
+  const number = Number(value);
+  return Number.isFinite(number) ? formatNumber(number) : fallback;
+}
+
+function formatTimestamp(value) {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toLocaleString() : 'Waiting';
 }
 
 function formatDuration(ms) {
@@ -933,6 +952,112 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
   );
 }
 
+function AccountWealthStrip({ stats }) {
+  const fdMinimum = stats?.finalDestinationKills?.minimum;
+  return (
+    <div className="account-wealth-strip" aria-label="Account wealth summary">
+      <div>
+        <span>Current</span>
+        <strong>{formatCoins(stats?.estimatedPurse)}</strong>
+      </div>
+      <div>
+        <span>Expected</span>
+        <strong>{formatCoins(stats?.expectedCoins)}</strong>
+      </div>
+      <div>
+        <span>Eyes</span>
+        <strong>{formatStatNumber(stats?.summoningEyesHeld)}</strong>
+      </div>
+      <div>
+        <span>FD</span>
+        <strong>{fdMinimum == null ? '-' : formatStatNumber(fdMinimum)}</strong>
+      </div>
+    </div>
+  );
+}
+
+function RemoteWealthPanel({ stats }) {
+  const finalDestinationKills = stats?.finalDestinationKills || {};
+  const moneyRows = [
+    ['Reported purse', stats?.purse],
+    ['Current estimate', stats?.estimatedPurse],
+    ['Auction listings', stats?.ahListedValue],
+    ['Held eye value', stats?.heldEyeValue],
+    ['Listed eye value', stats?.listedEyeValue],
+    ['Expected total', stats?.expectedCoins],
+  ];
+  const fdRows = [
+    ['Helmet', finalDestinationKills.helmet],
+    ['Chestplate', finalDestinationKills.chestplate],
+    ['Leggings', finalDestinationKills.leggings],
+    ['Boots', finalDestinationKills.boots],
+  ];
+
+  return (
+    <section className="remote-panel remote-wealth-panel">
+      <div className="remote-section-title">
+        <div><Coins size={18} aria-hidden="true" /></div>
+        <div>
+          <h3>Account Wealth</h3>
+          <p className="muted">Purse, active auctions, summoning eyes, and Final Destination armor progress.</p>
+        </div>
+      </div>
+      <div className="remote-wealth-grid">
+        <div className="remote-wealth-group">
+          <div className="remote-wealth-group-head">
+            <Coins size={16} aria-hidden="true" />
+            <span>Coins</span>
+          </div>
+          {moneyRows.map(([label, value]) => (
+            <div className="remote-wealth-row" key={label}>
+              <span>{label}</span>
+              <strong>{formatCoins(value)}</strong>
+            </div>
+          ))}
+        </div>
+        <div className="remote-wealth-group">
+          <div className="remote-wealth-group-head">
+            <Eye size={16} aria-hidden="true" />
+            <span>Summoning Eyes</span>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Held</span>
+            <strong>{formatStatNumber(stats?.summoningEyesHeld)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Listed</span>
+            <strong>{formatStatNumber(stats?.summoningEyesListed)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Listed price</span>
+            <strong>{formatCoins(stats?.summoningEyeListPrice)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Last stat update</span>
+            <strong>{formatTimestamp(stats?.updatedAt)}</strong>
+          </div>
+        </div>
+        <div className="remote-wealth-group">
+          <div className="remote-wealth-group-head">
+            <Shirt size={16} aria-hidden="true" />
+            <span>Final Destination</span>
+          </div>
+          {fdRows.map(([label, value]) => (
+            <div className="remote-wealth-row" key={label}>
+              <span>{label}</span>
+              <strong>{value == null ? '-' : formatStatNumber(value)}</strong>
+            </div>
+          ))}
+          <div className="remote-wealth-row">
+            <span>Lowest piece</span>
+            <strong>{finalDestinationKills.minimum == null ? '-' : formatStatNumber(finalDestinationKills.minimum)}</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendAction, onBack }) {
   const [isScreenshotExpanded, setIsScreenshotExpanded] = useState(false);
   const [actionType, setActionType] = useState('server_command');
@@ -1124,6 +1249,8 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendA
           </div>
         </form>
       </div>
+
+      <RemoteWealthPanel stats={account.wealthStats} />
 
       <RemoteLogPanel
         title="In-game Logs"
@@ -2166,6 +2293,8 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
                       <dd>{account.proxy_enabled ? `${account.proxy_type} ${account.proxy_host}:${account.proxy_port}` : 'Disabled'}</dd>
                     </div>
                   </dl>
+
+                  <AccountWealthStrip stats={account.wealthStats} />
 
                   {canManageUsers || canManageAccounts ? (
                     <div className="account-controls">

@@ -774,6 +774,100 @@ function clearListedSummoningEyes(db, accountId, quantity = null) {
   return getMinecraftAccountStats(db, accountId);
 }
 
+function compactMinecraftUuid(value) {
+  return String(value || '').replace(/-/g, '').trim().toLowerCase();
+}
+
+function cleanAuctionSnapshotId(auction) {
+  return String(auction?.uuid || auction?.auction_uuid || auction?.id || '').trim();
+}
+
+function auctionEndMs(auction) {
+  const number = Number(auction?.end ?? auction?.end_ms ?? auction?.endsAt);
+  return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0;
+}
+
+function auctionPrice(auction) {
+  return safeNonNegativeInteger(auction?.starting_bid ?? auction?.price ?? auction?.highest_bid_amount);
+}
+
+function reconcileMinecraftAccountAuctionSnapshots(db, accounts = [], activeAuctions = [], { nowMs = Date.now() } = {}) {
+  const timestampMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const timestamp = new Date(timestampMs).toISOString();
+  const accountByUuid = new Map();
+  for (const account of accounts || []) {
+    if (!account?.id) continue;
+    accountByUuid.set(compactMinecraftUuid(account.minecraft_uuid), account.id);
+  }
+  const accountIds = Array.from(new Set(accountByUuid.values()));
+  if (!accountIds.length) return { tracked: 0, sold: 0, expired: 0 };
+
+  const activeSnapshotIds = new Set();
+  let tracked = 0;
+  for (const auction of activeAuctions || []) {
+    const snapshotId = cleanAuctionSnapshotId(auction);
+    const accountId = accountByUuid.get(compactMinecraftUuid(auction?.auctioneer));
+    const endMs = auctionEndMs(auction);
+    if (!snapshotId || !accountId || (endMs && endMs <= timestampMs)) continue;
+
+    activeSnapshotIds.add(snapshotId);
+    tracked += 1;
+    ensureMinecraftAccountStatsRow(db, accountId);
+    db.prepare(`
+      INSERT INTO minecraft_account_auction_snapshots (
+        auction_uuid,
+        minecraft_account_id,
+        price,
+        end_ms,
+        last_seen_at,
+        state
+      )
+      VALUES (?, ?, ?, ?, ?, 'active')
+      ON CONFLICT(auction_uuid) DO UPDATE SET
+        minecraft_account_id = excluded.minecraft_account_id,
+        price = excluded.price,
+        end_ms = excluded.end_ms,
+        last_seen_at = excluded.last_seen_at,
+        state = 'active'
+    `).run(snapshotId, accountId, auctionPrice(auction), endMs, timestamp);
+  }
+
+  const placeholders = accountIds.map(() => '?').join(', ');
+  const activeSnapshots = db.prepare(`
+    SELECT *
+    FROM minecraft_account_auction_snapshots
+    WHERE state = 'active'
+      AND minecraft_account_id IN (${placeholders})
+  `).all(...accountIds);
+
+  let sold = 0;
+  let expired = 0;
+  for (const snapshot of activeSnapshots) {
+    if (activeSnapshotIds.has(snapshot.auction_uuid)) continue;
+    const state = snapshot.end_ms && timestampMs < snapshot.end_ms ? 'sold' : 'expired';
+    if (state === 'sold') {
+      ensureMinecraftAccountStatsRow(db, snapshot.minecraft_account_id);
+      db.prepare(`
+        UPDATE minecraft_account_stats
+        SET sold_auction_credit = sold_auction_credit + ?,
+            updated_at = ?
+        WHERE minecraft_account_id = ?
+      `).run(safeNonNegativeInteger(snapshot.price), timestamp, snapshot.minecraft_account_id);
+      sold += 1;
+    } else {
+      expired += 1;
+    }
+    db.prepare(`
+      UPDATE minecraft_account_auction_snapshots
+      SET state = ?,
+          last_seen_at = ?
+      WHERE auction_uuid = ?
+    `).run(state, timestamp, snapshot.auction_uuid);
+  }
+
+  return { tracked, sold, expired };
+}
+
 function normalizeProxyType(value) {
   const type = String(value || 'SOCKS5').trim().toUpperCase();
   if (!['SOCKS5', 'SOCKS4', 'HTTP'].includes(type)) {
@@ -1172,6 +1266,7 @@ module.exports = {
   incrementSummoningEyes,
   moveSummoningEyesToListed,
   clearListedSummoningEyes,
+  reconcileMinecraftAccountAuctionSnapshots,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
