@@ -930,10 +930,8 @@ tbody tr:hover {
 
 .account-wealth-strip div {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
   gap: 3px;
   min-width: 0;
-  align-items: center;
 }
 
 .account-wealth-strip span {
@@ -945,7 +943,6 @@ tbody tr:hover {
 }
 
 .account-wealth-strip strong {
-  grid-column: 2;
   overflow: hidden;
   color: var(--text);
   font-size: 0.86rem;
@@ -955,7 +952,6 @@ tbody tr:hover {
 }
 
 .wealth-icon,
-.wealth-row-icon,
 .wealth-title-icon {
   display: block;
   flex: 0 0 auto;
@@ -1689,11 +1685,6 @@ tbody tr:hover {
   min-width: 0;
   color: var(--muted);
   font-size: 0.82rem;
-}
-
-.wealth-row-icon {
-  width: 20px;
-  height: 20px;
 }
 
 .remote-wealth-row strong {

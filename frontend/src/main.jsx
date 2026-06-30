@@ -965,16 +965,15 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
 function AccountWealthStrip({ stats }) {
   const fdMinimum = stats?.finalDestinationKills?.minimum;
   const items = [
-    { label: 'Current', value: formatCoins(stats?.estimatedPurse), icon: coinGoldIcon },
-    { label: 'Expected', value: formatCoins(stats?.expectedCoins), icon: coinGoldIcon },
-    { label: 'Eyes', value: formatStatNumber(stats?.summoningEyesHeld), icon: summoningEyeIcon },
-    { label: 'FD', value: fdMinimum == null ? '-' : formatStatNumber(fdMinimum), icon: fdHelmetIcon },
+    { label: 'Current', value: formatCoins(stats?.estimatedPurse) },
+    { label: 'Expected', value: formatCoins(stats?.expectedCoins) },
+    { label: 'Eyes', value: formatStatNumber(stats?.summoningEyesHeld) },
+    { label: 'FD', value: fdMinimum == null ? '-' : formatStatNumber(fdMinimum) },
   ];
   return (
     <div className="account-wealth-strip" aria-label="Account wealth summary">
       {items.map((item) => (
         <div key={item.label}>
-          <img className="wealth-icon" src={item.icon} alt="" aria-hidden="true" />
           <span>{item.label}</span>
           <strong>{item.value}</strong>
         </div>
@@ -994,10 +993,10 @@ function RemoteWealthPanel({ stats }) {
     ['Expected total', stats?.expectedCoins],
   ];
   const fdRows = [
-    ['Helmet', finalDestinationKills.helmet, finalDestinationIcons.helmet],
-    ['Chestplate', finalDestinationKills.chestplate, finalDestinationIcons.chestplate],
-    ['Leggings', finalDestinationKills.leggings, finalDestinationIcons.leggings],
-    ['Boots', finalDestinationKills.boots, finalDestinationIcons.boots],
+    ['Helmet', finalDestinationKills.helmet],
+    ['Chestplate', finalDestinationKills.chestplate],
+    ['Leggings', finalDestinationKills.leggings],
+    ['Boots', finalDestinationKills.boots],
   ];
 
   return (
@@ -1017,7 +1016,7 @@ function RemoteWealthPanel({ stats }) {
           </div>
           {moneyRows.map(([label, value]) => (
             <div className="remote-wealth-row" key={label}>
-              <span><img className="wealth-row-icon" src={coinGoldIcon} alt="" aria-hidden="true" />{label}</span>
+              <span>{label}</span>
               <strong>{formatCoins(value)}</strong>
             </div>
           ))}
@@ -1028,15 +1027,15 @@ function RemoteWealthPanel({ stats }) {
             <span>Summoning Eyes</span>
           </div>
           <div className="remote-wealth-row">
-            <span><img className="wealth-row-icon" src={summoningEyeIcon} alt="" aria-hidden="true" />Held</span>
+            <span>Held</span>
             <strong>{formatStatNumber(stats?.summoningEyesHeld)}</strong>
           </div>
           <div className="remote-wealth-row">
-            <span><img className="wealth-row-icon" src={summoningEyeIcon} alt="" aria-hidden="true" />Listed</span>
+            <span>Listed</span>
             <strong>{formatStatNumber(stats?.summoningEyesListed)}</strong>
           </div>
           <div className="remote-wealth-row">
-            <span><img className="wealth-row-icon" src={coinGoldIcon} alt="" aria-hidden="true" />Listed price</span>
+            <span>Listed price</span>
             <strong>{formatCoins(stats?.summoningEyeListPrice)}</strong>
           </div>
           <div className="remote-wealth-row">
@@ -1049,9 +1048,9 @@ function RemoteWealthPanel({ stats }) {
             <img className="wealth-icon" src={fdHelmetIcon} alt="" aria-hidden="true" />
             <span>Final Destination</span>
           </div>
-          {fdRows.map(([label, value, icon]) => (
+          {fdRows.map(([label, value]) => (
             <div className="remote-wealth-row" key={label}>
-              <span><img className="wealth-row-icon" src={icon} alt="" aria-hidden="true" />{label}</span>
+              <span>{label}</span>
               <strong>{value == null ? '-' : formatStatNumber(value)}</strong>
             </div>
           ))}
