@@ -12,6 +12,7 @@ const {
   createMinecraftAccount,
   updateMinecraftAccountProxy,
   upsertMinecraftAccountStats,
+  getMinecraftAccountStats,
 } = require('../auth-db');
 const { createAppServer, createAuctionIndexService } = require('../server');
 
@@ -653,6 +654,69 @@ test('mod websocket accepts active and offline status messages', async () => {
     assert.strictEqual(account.status, 'offline');
   } finally {
     socket.close();
+    await close(server);
+  }
+});
+
+test('mod websocket ingests account wealth stat events', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_wealth_stats',
+  });
+  const server = createAppServer({
+    db,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000066',
+        name: 'WealthStatPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_wealth_stats',
+      username: 'WealthStatPlayer',
+    }));
+    await waitForSocketMessage(socket);
+
+    socket.send(JSON.stringify({
+      type: 'account_stats',
+      purse: 12_000_000,
+      finalDestinationKills: {
+        helmet: 25_000,
+        chestplate: 25_001,
+        leggings: 25_002,
+        boots: 25_003,
+      },
+    }));
+    await waitForSocketMessageMatching(socket, (message) => message.type === 'account_stats_ok');
+
+    socket.send(JSON.stringify({ type: 'summoning_eye_event', action: 'drop', quantity: 2 }));
+    await waitForSocketMessageMatching(socket, (message) => message.type === 'summoning_eye_event_ok');
+    socket.send(JSON.stringify({ type: 'summoning_eye_event', action: 'sell_order', quantity: 1, pricePerEye: 1_500_000 }));
+    await waitForSocketMessageMatching(socket, (message) => message.type === 'summoning_eye_event_ok');
+
+    const account = db.prepare('SELECT * FROM minecraft_accounts WHERE minecraft_username = ?').get('WealthStatPlayer');
+    const stats = getMinecraftAccountStats(db, account.id);
+    assert.strictEqual(stats.purse, 12_000_000);
+    assert.strictEqual(stats.fd_helmet_kills, 25_000);
+    assert.strictEqual(stats.fd_chestplate_kills, 25_001);
+    assert.strictEqual(stats.fd_leggings_kills, 25_002);
+    assert.strictEqual(stats.fd_boots_kills, 25_003);
+    assert.strictEqual(stats.summoning_eyes_held, 1);
+    assert.strictEqual(stats.summoning_eyes_listed, 1);
+    assert.strictEqual(stats.summoning_eye_list_price, 1_500_000);
+  } finally {
+    closeSocketSilently(socket);
     await close(server);
   }
 });

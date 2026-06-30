@@ -33,6 +33,10 @@ const {
   listMinecraftAccounts,
   upsertMinecraftAccountFromMod,
   getMinecraftAccountStats,
+  upsertMinecraftAccountStats,
+  incrementSummoningEyes,
+  moveSummoningEyesToListed,
+  clearListedSummoningEyes,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
@@ -1569,6 +1573,43 @@ function sendDeletedModAccountError(socket) {
   setImmediate(() => socket.close(4000, 'account_deleted'));
 }
 
+function safeStatInteger(value, fallback = 0) {
+  if (value == null || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.floor(number));
+}
+
+function cleanAccountStatsMessage(message = {}) {
+  const kills = message.finalDestinationKills || {};
+  return {
+    purse: safeStatInteger(message.purse, null),
+    fdHelmetKills: safeStatInteger(kills.helmet, null),
+    fdChestplateKills: safeStatInteger(kills.chestplate, null),
+    fdLeggingsKills: safeStatInteger(kills.leggings, null),
+    fdBootsKills: safeStatInteger(kills.boots, null),
+  };
+}
+
+function applySummoningEyeEvent(db, accountId, message = {}) {
+  const action = String(message.action || '').trim().toLowerCase();
+  const quantity = safeStatInteger(message.quantity, 1);
+  if (quantity <= 0) return getMinecraftAccountStats(db, accountId);
+  if (action === 'drop') {
+    return incrementSummoningEyes(db, accountId, quantity);
+  }
+  if (action === 'instant_sell') {
+    return incrementSummoningEyes(db, accountId, -quantity);
+  }
+  if (action === 'sell_order') {
+    return moveSummoningEyesToListed(db, accountId, quantity, safeStatInteger(message.pricePerEye));
+  }
+  if (action === 'filled' || action === 'claimed') {
+    return clearListedSummoningEyes(db, accountId, quantity);
+  }
+  return null;
+}
+
 function attachModWebSocketServer(server, {
   db,
   fetchImpl,
@@ -1766,6 +1807,38 @@ function attachModWebSocketServer(server, {
         if (message.type === 'banned' && account.status === 'banned') {
           modConnections.broadcastDisconnect({ sourceSocket: socket, sourceAccount: account });
         }
+        return;
+      }
+
+      if (message.type === 'account_stats') {
+        const stats = upsertMinecraftAccountStats(db, account.id, cleanAccountStatsMessage(message));
+        dashboardAccounts?.broadcast();
+        sendSocketJson(socket, {
+          type: 'account_stats_ok',
+          accountId: account.id,
+          stats,
+          sentAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (message.type === 'summoning_eye_event') {
+        const stats = applySummoningEyeEvent(db, account.id, message);
+        if (!stats) {
+          sendSocketJson(socket, {
+            type: 'error',
+            code: 'invalid_summoning_eye_event',
+            message: 'Invalid summoning eye event action',
+          });
+          return;
+        }
+        dashboardAccounts?.broadcast();
+        sendSocketJson(socket, {
+          type: 'summoning_eye_event_ok',
+          accountId: account.id,
+          stats,
+          sentAt: new Date().toISOString(),
+        });
         return;
       }
 
