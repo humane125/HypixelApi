@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test": "node tests/auction-core.test.js && node tests/auth-db.test.js && node tests/proxy-drafts.test.js && node tests/server-auth.test.js",
+    "test": "node tests/auction-core.test.js && node tests/account-stats-core.test.js && node tests/auth-db.test.js && node tests/proxy-drafts.test.js && node tests/server-auth.test.js",
     "start": "node server.js"
   },
   "keywords": [],
