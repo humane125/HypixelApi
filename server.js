@@ -37,6 +37,7 @@ const {
   incrementSummoningEyes,
   moveSummoningEyesToListed,
   clearListedSummoningEyes,
+  moveListedSummoningEyesToHeld,
   reconcileMinecraftAccountAuctionSnapshots,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
@@ -1607,6 +1608,9 @@ function applySummoningEyeEvent(db, accountId, message = {}) {
   }
   if (action === 'filled' || action === 'claimed') {
     return clearListedSummoningEyes(db, accountId, quantity);
+  }
+  if (action === 'cancelled') {
+    return moveListedSummoningEyesToHeld(db, accountId, quantity);
   }
   return null;
 }

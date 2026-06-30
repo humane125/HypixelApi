@@ -26,6 +26,7 @@ const {
   upsertMinecraftAccountStats,
   incrementSummoningEyes,
   moveSummoningEyesToListed,
+  moveListedSummoningEyesToHeld,
   getMinecraftAccountStats,
   reconcileMinecraftAccountAuctionSnapshots,
 } = require('../auth-db');
@@ -86,6 +87,26 @@ test('minecraft account wealth stats persist summoning eye counts', () => {
   assert.strictEqual(stats.summoning_eyes_held, 1);
   assert.strictEqual(stats.summoning_eyes_listed, 4);
   assert.strictEqual(stats.summoning_eye_list_price, 1_200_000);
+});
+
+test('cancelled summoning eye sell offers move listed eyes back to held', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Eye account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000902',
+    minecraftUsername: 'EyeAccount',
+  });
+
+  upsertMinecraftAccountStats(db, account.id, { summoningEyesHeld: 18 });
+  moveSummoningEyesToListed(db, account.id, 18, 1_587_487);
+  moveListedSummoningEyesToHeld(db, account.id, 10);
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.summoning_eyes_held, 10);
+  assert.strictEqual(stats.summoning_eyes_listed, 8);
+  assert.strictEqual(stats.summoning_eye_list_price, 1_587_487);
 });
 
 test('minecraft account auction snapshots credit sold auctions only before expiry', () => {

@@ -774,6 +774,22 @@ function clearListedSummoningEyes(db, accountId, quantity = null) {
   return getMinecraftAccountStats(db, accountId);
 }
 
+function moveListedSummoningEyesToHeld(db, accountId, quantity) {
+  const existing = getMinecraftAccountStats(db, accountId);
+  const moveQuantity = Math.min(safeNonNegativeInteger(quantity), safeNonNegativeInteger(existing.summoning_eyes_listed));
+  const nextHeld = safeNonNegativeInteger(existing.summoning_eyes_held) + moveQuantity;
+  const nextListed = safeNonNegativeInteger(existing.summoning_eyes_listed) - moveQuantity;
+  ensureMinecraftAccountStatsRow(db, accountId);
+  db.prepare(`
+    UPDATE minecraft_account_stats
+    SET summoning_eyes_held = ?,
+        summoning_eyes_listed = ?,
+        updated_at = ?
+    WHERE minecraft_account_id = ?
+  `).run(nextHeld, nextListed, nowIso(), accountId);
+  return getMinecraftAccountStats(db, accountId);
+}
+
 function compactMinecraftUuid(value) {
   return String(value || '').replace(/-/g, '').trim().toLowerCase();
 }
@@ -1266,6 +1282,7 @@ module.exports = {
   incrementSummoningEyes,
   moveSummoningEyesToListed,
   clearListedSummoningEyes,
+  moveListedSummoningEyesToHeld,
   reconcileMinecraftAccountAuctionSnapshots,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
