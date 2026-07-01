@@ -49,7 +49,7 @@ const {
   deleteMinecraftAccount,
   writeAuditLog,
 } = require('./auth-db');
-const { computeAccountWealthStats } = require('./account-stats-core');
+const { normalizeUuid, computeAccountWealthStats } = require('./account-stats-core');
 
 const DEFAULT_PORT = 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1923,6 +1923,40 @@ function createAppServer(options = {}) {
     ));
   }
 
+  function findMinecraftAccountByIdentity(minecraftUuid, minecraftUsername) {
+    if (!db) return null;
+    const cleanUuid = normalizeUuid(minecraftUuid);
+    const cleanUsername = String(minecraftUsername || '').trim();
+    if (cleanUuid) {
+      const byUuid = db.prepare("SELECT * FROM minecraft_accounts WHERE lower(replace(minecraft_uuid, '-', '')) = ?")
+        .get(cleanUuid);
+      if (byUuid) return byUuid;
+    }
+    if (cleanUsername) {
+      return db.prepare('SELECT * FROM minecraft_accounts WHERE lower(minecraft_username) = lower(?)')
+        .get(cleanUsername) || null;
+    }
+    return null;
+  }
+
+  function serializeModAccountWealth(account) {
+    const wealthStats = computeAccountWealthStats({
+      account,
+      stats: getMinecraftAccountStats(db, account.id),
+      activeAuctions: typeof auctionIndex.getItems === 'function' ? auctionIndex.getItems() : [],
+      summoningEyeSellOrderPrice: bazaarPriceService.getCachedSummoningEyeSellOrderPrice?.() || 0,
+    });
+    return {
+      minecraftUuid: account.minecraft_uuid,
+      minecraftUsername: account.minecraft_username,
+      wealthStats: {
+        purse: wealthStats.purse,
+        finalDestinationKills: wealthStats.finalDestinationKills,
+        macroing: wealthStats.macroing,
+      },
+    };
+  }
+
   async function refreshAuctionIndexForDashboardAccounts() {
     if (typeof auctionIndex.ensureFresh !== 'function') return;
     try {
@@ -2123,6 +2157,31 @@ function createAppServer(options = {}) {
           proxyEnabled: proxy.enabled,
         });
         writeJson(res, 200, { proxy });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/mod/account-wealth' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = authorize(req, parsedUrl, body, ['mod:connect']);
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        if (!body.minecraftUuid && !body.minecraftUsername) {
+          writeJson(res, 400, { error: 'minecraftUuid or minecraftUsername is required' });
+          return;
+        }
+        bazaarPriceService.ensureFresh?.();
+        const account = findMinecraftAccountByIdentity(body.minecraftUuid, body.minecraftUsername);
+        if (!account) {
+          writeJson(res, 404, { error: 'minecraft_account_not_found' });
+          return;
+        }
+        writeJson(res, 200, { account: serializeModAccountWealth(account) });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
       }

@@ -1747,6 +1747,63 @@ test('dashboard can save account proxy settings without exposing proxy passwords
   }
 });
 
+test('mod api key can fetch one account wealth snapshot without dashboard-only fields', async () => {
+  const { db, owner, server } = createTestServerWithOptions({
+    bazaarPriceService: {
+      ensureFresh: async () => {},
+      getCachedSummoningEyeSellOrderPrice: () => 1_500_000,
+    },
+  });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'Mod Wealth Lookup',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_account_wealth_lookup',
+  });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Macro',
+    minecraftUuid: '00000000-0000-0000-0000-000000000777',
+    minecraftUsername: 'MacroSeven',
+  });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 12_500_000,
+    fdHelmetKills: 12_000,
+    fdChestplateKills: 11_999,
+    fdLeggingsKills: 12_001,
+    fdBootsKills: 12_002,
+    macroing: true,
+  }, { now: '2026-07-01T10:00:00.000Z' });
+
+  const baseUrl = await listen(server);
+  try {
+    const response = await fetch(`${baseUrl}/api/mod/account-wealth`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer hpx_test_mod_account_wealth_lookup',
+      },
+      body: JSON.stringify({
+        minecraftUuid: '00000000-0000-0000-0000-000000000777',
+        minecraftUsername: 'MacroSeven',
+      }),
+    });
+
+    const responseText = await response.text();
+    assert.strictEqual(response.status, 200, responseText);
+    const body = JSON.parse(responseText);
+    assert.strictEqual(body.account.minecraftUuid, '00000000-0000-0000-0000-000000000777');
+    assert.strictEqual(body.account.minecraftUsername, 'MacroSeven');
+    assert.strictEqual(body.account.wealthStats.purse, 12_500_000);
+    assert.strictEqual(body.account.wealthStats.finalDestinationKills.minimum, 11_999);
+    assert.strictEqual(body.account.wealthStats.macroing, true);
+    assert.strictEqual(body.account.proxy, undefined);
+    assert.strictEqual(body.account.owner, undefined);
+  } finally {
+    await close(server);
+  }
+});
+
 test('mod account proxy lookup is authenticated and scoped to the minecraft account', async () => {
   const { db, owner, server } = createTestServer();
   const other = createUser(db, { username: 'other', role: 'manager' });
