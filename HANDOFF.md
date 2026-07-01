@@ -2,7 +2,7 @@
 
 Date: 2026-07-01
 Branch: `master`
-Latest local commit before this handoff: `b2cf301`
+Latest local commit before this handoff: `842d5e7`
 
 ## Current Setup
 
@@ -35,6 +35,13 @@ Test the account wealth dashboard with real macro accounts after deploying API/d
 
 ## 2026-07-01 Changes
 
+- Added mod-authenticated account wealth lookup for Alt Manager handoff policy UI:
+  - `POST /api/mod/account-wealth`
+  - Requires a mod API key with `mod:connect`.
+  - Accepts `minecraftUuid` and/or `minecraftUsername`.
+  - Returns only narrow wealth data: Minecraft UUID/name, purse, Final Destination kill stats, and macroing state.
+  - Does not return dashboard owner, proxy settings, API keys, or dashboard-only fields.
+  - Test added: `mod api key can fetch one account wealth snapshot without dashboard-only fields`.
 - Added the `macroing` account wealth state from the 2026-06-30 plan:
   - API persists macroing session baselines and latest samples in `minecraft_account_stats`.
   - Mod `account_stats` payloads can mark an account as macroing.
