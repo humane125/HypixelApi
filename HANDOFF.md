@@ -57,6 +57,7 @@ Test the account wealth dashboard with real macro accounts after deploying API/d
   - macroing rates while macroing
   - recent auction sold/expired events
 - Summoning Eye sell-order tracking now trusts the Bazaar sell-order quantity even if the eyes existed before the mod started tracking them.
+- Dashboard account listing now refreshes the Hypixel auction index before computing account wealth. This fixes accounts showing `ahListedValue = 0` after API restart or before any auction-search page had refreshed the index.
 - API tests and frontend build passed locally:
   - `npm test`
   - `npm run build`

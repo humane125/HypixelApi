@@ -1645,6 +1645,49 @@ test('dashboard account lists include computed wealth stats', async () => {
   }
 });
 
+test('dashboard account list refreshes auction index before computing ah listed value', async () => {
+  const nowMs = Date.now();
+  let ensureFreshCalls = 0;
+  let auctionItems = [];
+  const auctionIndex = {
+    ensureFresh: async () => {
+      ensureFreshCalls += 1;
+      auctionItems = [{
+        uuid: 'fresh-dashboard-auction',
+        auctioneer: '00000000000000000000000000000941',
+        starting_bid: 24_999_000,
+        bin: true,
+        end: nowMs + 60_000,
+      }];
+      return { source: 'fresh', status: { ready: true } };
+    },
+    refresh: async () => ({ source: 'cache', status: { ready: true } }),
+    getStatus: () => ({ ready: ensureFreshCalls > 0 }),
+    getItems: () => auctionItems,
+  };
+  const { db, owner, server } = createTestServerWithOptions({ auctionIndex });
+  createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Fresh AH',
+    minecraftUuid: '00000000-0000-0000-0000-000000000941',
+    minecraftUsername: 'FreshAuctionAccount',
+  });
+
+  const baseUrl = await listen(server);
+  try {
+    const listed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: await loginDashboard(baseUrl) },
+    });
+    assert.strictEqual(listed.status, 200);
+    const account = (await listed.json()).accounts.find((row) => row.minecraft_username === 'FreshAuctionAccount');
+
+    assert.strictEqual(ensureFreshCalls, 1);
+    assert.strictEqual(account.wealthStats.ahListedValue, 24_999_000);
+  } finally {
+    await close(server);
+  }
+});
+
 test('dashboard can save account proxy settings without exposing proxy passwords in account lists', async () => {
   const { server } = createTestServer();
   const baseUrl = await listen(server);

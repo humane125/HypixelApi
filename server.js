@@ -1922,6 +1922,16 @@ function createAppServer(options = {}) {
       getLiveAccountStatuses()
     ));
   }
+
+  async function refreshAuctionIndexForDashboardAccounts() {
+    if (typeof auctionIndex.ensureFresh !== 'function') return;
+    try {
+      await auctionIndex.ensureFresh();
+    } catch {
+      // Dashboard account lists should still render from the existing cache if Hypixel refresh fails.
+    }
+  }
+
   const dashboardAccounts = db
     ? createDashboardAccountBroadcaster({
       db,
@@ -2177,6 +2187,7 @@ function createAppServer(options = {}) {
         writeJson(res, access.status, access.payload);
         return;
       }
+      await refreshAuctionIndexForDashboardAccounts();
       writeJson(res, 200, { accounts: listDashboardMinecraftAccounts() });
       return;
     }
