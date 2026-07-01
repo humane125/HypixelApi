@@ -728,6 +728,8 @@ function minimumFinalDestinationKills(stats) {
   return values.length ? Math.min(...values.map((value) => safeNonNegativeInteger(value))) : null;
 }
 
+const MACRO_SESSION_RESET_GRACE_MS = 3 * 60 * 1000;
+
 function upsertMinecraftAccountStats(db, accountId, patch = {}, options = {}) {
   const existing = getMinecraftAccountStats(db, accountId);
   const timestamp = options.now || nowIso();
@@ -758,28 +760,38 @@ function upsertMinecraftAccountStats(db, accountId, patch = {}, options = {}) {
     ? Boolean(patch.macroing)
     : safeNonNegativeInteger(existing.macroing) === 1;
   const currentPurse = safeNonNegativeInteger(next.purse);
+  const existingMacroWasOn = safeNonNegativeInteger(existing.macroing) === 1;
+  const existingSessionStarted = Boolean(existing.macro_started_at);
+  const existingOffAtMs = Date.parse(existing.macro_last_sample_at || '');
+  const timestampMs = Date.parse(timestamp);
+  const canResumeExistingSession = existingSessionStarted
+    && (existingMacroWasOn
+      || (Number.isFinite(existingOffAtMs)
+        && Number.isFinite(timestampMs)
+        && timestampMs - existingOffAtMs <= MACRO_SESSION_RESET_GRACE_MS));
   let macro = {
     macroing: 0,
-    macro_started_at: null,
-    macro_last_sample_at: null,
-    macro_base_purse: currentPurse,
+    macro_started_at: existingSessionStarted ? existing.macro_started_at : null,
+    macro_last_sample_at: existingSessionStarted
+      ? (existingMacroWasOn ? timestamp : existing.macro_last_sample_at)
+      : null,
+    macro_base_purse: existingSessionStarted ? safeNonNegativeInteger(existing.macro_base_purse) : currentPurse,
     macro_last_purse: currentPurse,
-    macro_base_fd_minimum: nextFdMinimum,
+    macro_base_fd_minimum: existingSessionStarted ? nullableNonNegativeInteger(existing.macro_base_fd_minimum) : nextFdMinimum,
     macro_last_fd_minimum: nextFdMinimum,
-    macro_base_eye_drops: eyeDropsTotal,
+    macro_base_eye_drops: existingSessionStarted ? safeNonNegativeInteger(existing.macro_base_eye_drops) : eyeDropsTotal,
     macro_last_eye_drops: eyeDropsTotal,
   };
   if (nextMacroing) {
-    const existingMacroing = safeNonNegativeInteger(existing.macroing) === 1 && existing.macro_started_at;
     macro = {
       macroing: 1,
-      macro_started_at: existingMacroing ? existing.macro_started_at : timestamp,
+      macro_started_at: canResumeExistingSession ? existing.macro_started_at : timestamp,
       macro_last_sample_at: timestamp,
-      macro_base_purse: existingMacroing ? safeNonNegativeInteger(existing.macro_base_purse) : currentPurse,
+      macro_base_purse: canResumeExistingSession ? safeNonNegativeInteger(existing.macro_base_purse) : currentPurse,
       macro_last_purse: currentPurse,
-      macro_base_fd_minimum: existingMacroing ? nullableNonNegativeInteger(existing.macro_base_fd_minimum) : nextFdMinimum,
+      macro_base_fd_minimum: canResumeExistingSession ? nullableNonNegativeInteger(existing.macro_base_fd_minimum) : nextFdMinimum,
       macro_last_fd_minimum: nextFdMinimum,
-      macro_base_eye_drops: existingMacroing ? safeNonNegativeInteger(existing.macro_base_eye_drops) : eyeDropsTotal,
+      macro_base_eye_drops: canResumeExistingSession ? safeNonNegativeInteger(existing.macro_base_eye_drops) : eyeDropsTotal,
       macro_last_eye_drops: eyeDropsTotal,
     };
   }

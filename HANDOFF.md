@@ -41,6 +41,7 @@ Test the account wealth dashboard with real macro accounts after deploying API/d
   - Dashboard treats live macroing accounts as their own status.
   - Macroing accounts sort first, then Hypixel, then active, then offline/banned.
   - Macroing status is purple; Hypixel status is orange.
+  - Macroing rate baselines survive short macro-off gaps for 3 minutes. This covers lobby-collision switches, random Nebula interruptions, and manual stops; if macroing returns within 3 minutes, kills/hour and eyes/hour resume the same session. If it stays off longer than 3 minutes, the next macro-on starts a fresh baseline.
 - Wealth totals were corrected:
   - `expectedCoins` is now future value only: active AH listed value + held/listed Summoning Eye value.
   - Current purse is shown separately.

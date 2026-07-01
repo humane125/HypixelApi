@@ -169,6 +169,100 @@ test('macroing account stats keep session baselines and latest samples', () => {
   assert.strictEqual(stats.summoning_eye_drops_total, 2);
 });
 
+test('macroing account stats resume the same session after short off gaps', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Macro grace account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000904',
+    minecraftUsername: 'MacroGrace',
+  });
+
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_000_000,
+    fdHelmetKills: 100,
+    fdChestplateKills: 100,
+    fdLeggingsKills: 100,
+    fdBootsKills: 100,
+    macroing: true,
+  }, { now: '2026-07-01T00:00:00.000Z' });
+  incrementSummoningEyes(db, account.id, 1, { now: '2026-07-01T00:04:00.000Z' });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_010_000,
+    fdHelmetKills: 110,
+    fdChestplateKills: 110,
+    fdLeggingsKills: 110,
+    fdBootsKills: 110,
+    macroing: false,
+  }, { now: '2026-07-01T00:05:00.000Z' });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_020_000,
+    fdHelmetKills: 120,
+    fdChestplateKills: 120,
+    fdLeggingsKills: 120,
+    fdBootsKills: 120,
+    macroing: true,
+  }, { now: '2026-07-01T00:07:59.000Z' });
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.macroing, 1);
+  assert.strictEqual(stats.macro_started_at, '2026-07-01T00:00:00.000Z');
+  assert.strictEqual(stats.macro_base_purse, 1_000_000);
+  assert.strictEqual(stats.macro_last_purse, 1_020_000);
+  assert.strictEqual(stats.macro_base_fd_minimum, 100);
+  assert.strictEqual(stats.macro_last_fd_minimum, 120);
+  assert.strictEqual(stats.macro_base_eye_drops, 0);
+  assert.strictEqual(stats.macro_last_eye_drops, 1);
+});
+
+test('macroing account stats reset after off gaps longer than three minutes', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Macro reset account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000905',
+    minecraftUsername: 'MacroReset',
+  });
+
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_000_000,
+    fdHelmetKills: 100,
+    fdChestplateKills: 100,
+    fdLeggingsKills: 100,
+    fdBootsKills: 100,
+    macroing: true,
+  }, { now: '2026-07-01T00:00:00.000Z' });
+  incrementSummoningEyes(db, account.id, 1, { now: '2026-07-01T00:04:00.000Z' });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_010_000,
+    fdHelmetKills: 110,
+    fdChestplateKills: 110,
+    fdLeggingsKills: 110,
+    fdBootsKills: 110,
+    macroing: false,
+  }, { now: '2026-07-01T00:05:00.000Z' });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_050_000,
+    fdHelmetKills: 150,
+    fdChestplateKills: 150,
+    fdLeggingsKills: 150,
+    fdBootsKills: 150,
+    macroing: true,
+  }, { now: '2026-07-01T00:08:01.000Z' });
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.macroing, 1);
+  assert.strictEqual(stats.macro_started_at, '2026-07-01T00:08:01.000Z');
+  assert.strictEqual(stats.macro_base_purse, 1_050_000);
+  assert.strictEqual(stats.macro_last_purse, 1_050_000);
+  assert.strictEqual(stats.macro_base_fd_minimum, 150);
+  assert.strictEqual(stats.macro_last_fd_minimum, 150);
+  assert.strictEqual(stats.macro_base_eye_drops, 1);
+  assert.strictEqual(stats.macro_last_eye_drops, 1);
+});
+
 test('minecraft account auction snapshots credit sold auctions only before expiry', () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
