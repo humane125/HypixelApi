@@ -39,6 +39,7 @@ const {
   clearListedSummoningEyes,
   moveListedSummoningEyesToHeld,
   reconcileMinecraftAccountAuctionSnapshots,
+  listMinecraftAccountAuctionEvents,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
@@ -1590,6 +1591,7 @@ function cleanAccountStatsMessage(message = {}) {
     fdChestplateKills: safeStatInteger(kills.chestplate, null),
     fdLeggingsKills: safeStatInteger(kills.leggings, null),
     fdBootsKills: safeStatInteger(kills.boots, null),
+    macroing: Boolean(message.macroing),
   };
 }
 
@@ -1898,15 +1900,21 @@ function createAppServer(options = {}) {
       reconcileMinecraftAccountAuctionSnapshots(db, accounts, activeAuctions);
     }
     const summoningEyeSellOrderPrice = bazaarPriceService.getCachedSummoningEyeSellOrderPrice?.() || 0;
-    return accounts.map((account) => ({
-      ...account,
-      wealthStats: computeAccountWealthStats({
+    return accounts.map((account) => {
+      const wealthStats = computeAccountWealthStats({
         account,
         stats: getMinecraftAccountStats(db, account.id),
         activeAuctions,
         summoningEyeSellOrderPrice,
-      }),
-    }));
+      });
+      return {
+        ...account,
+        wealthStats: {
+          ...wealthStats,
+          auctionEvents: listMinecraftAccountAuctionEvents(db, account.id, 5),
+        },
+      };
+    });
   }
   function listDashboardMinecraftAccounts() {
     return enrichAccountsWithWealthStats(applyLiveAccountStatuses(

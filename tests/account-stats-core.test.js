@@ -11,7 +11,7 @@ function test(name, fn) {
   }
 }
 
-test('expected coins include estimated purse active auctions and eye values', () => {
+test('expected coins exclude purse and include future value only', () => {
   const nowMs = Date.now();
   const result = computeAccountWealthStats({
     account: { minecraft_uuid: '00000000-0000-0000-0000-000000000901' },
@@ -32,10 +32,12 @@ test('expected coins include estimated purse active auctions and eye values', ()
 
   assert.strictEqual(result.purse, 10_000_000);
   assert.strictEqual(result.estimatedPurse, 34_999_000);
+  assert.strictEqual(result.currentTotalCoins, 34_999_000);
+  assert.strictEqual(result.soldAuctionCredit, 24_999_000);
   assert.strictEqual(result.ahListedValue, 24_999_000);
   assert.ok(result.heldEyeValue > 0);
   assert.strictEqual(result.listedEyeValue, 1_500_000);
-  assert.strictEqual(result.expectedCoins, result.estimatedPurse + result.ahListedValue + result.heldEyeValue + result.listedEyeValue);
+  assert.strictEqual(result.expectedCoins, result.ahListedValue + result.heldEyeValue + result.listedEyeValue);
 });
 
 test('expired auctions do not count as sold coins', () => {
@@ -51,5 +53,35 @@ test('expired auctions do not count as sold coins', () => {
   });
 
   assert.strictEqual(result.ahListedValue, 0);
-  assert.strictEqual(result.expectedCoins, 10_000_000);
+  assert.strictEqual(result.expectedCoins, 0);
+});
+
+test('macroing rates use session deltas only while macroing', () => {
+  const result = computeAccountWealthStats({
+    account: { minecraft_uuid: '00000000-0000-0000-0000-000000000901' },
+    stats: {
+      purse: 1_030_000,
+      macroing: 1,
+      macro_started_at: '2026-07-01T00:00:00.000Z',
+      macro_last_sample_at: '2026-07-01T00:30:00.000Z',
+      macro_base_purse: 1_000_000,
+      macro_last_purse: 1_030_000,
+      macro_base_fd_minimum: 100,
+      macro_last_fd_minimum: 121,
+      macro_base_eye_drops: 0,
+      macro_last_eye_drops: 2,
+    },
+    summoningEyeSellOrderPrice: 1_500_000,
+  });
+
+  assert.strictEqual(result.macroing, true);
+  assert.strictEqual(result.macroRates.mobCoins, 30_000);
+  assert.strictEqual(result.macroRates.mobCoinsPerHour, 60_000);
+  assert.strictEqual(result.macroRates.fdKills, 21);
+  assert.strictEqual(result.macroRates.fdKillsPerHour, 42);
+  assert.strictEqual(result.macroRates.fdValuePerHour, 168_000);
+  assert.strictEqual(result.macroRates.eyeDrops, 2);
+  assert.strictEqual(result.macroRates.eyeDropsPerHour, 4);
+  assert.strictEqual(result.macroRates.eyeValuePerHour, 5_925_000);
+  assert.strictEqual(result.macroRates.totalCoinsPerHour, 6_153_000);
 });

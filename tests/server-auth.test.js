@@ -691,6 +691,7 @@ test('mod websocket ingests account wealth stat events', async () => {
     socket.send(JSON.stringify({
       type: 'account_stats',
       purse: 12_000_000,
+      macroing: true,
       finalDestinationKills: {
         helmet: 25_000,
         chestplate: 25_001,
@@ -712,6 +713,7 @@ test('mod websocket ingests account wealth stat events', async () => {
     assert.strictEqual(stats.fd_chestplate_kills, 25_001);
     assert.strictEqual(stats.fd_leggings_kills, 25_002);
     assert.strictEqual(stats.fd_boots_kills, 25_003);
+    assert.strictEqual(stats.macroing, 1);
     assert.strictEqual(stats.summoning_eyes_held, 1);
     assert.strictEqual(stats.summoning_eyes_listed, 1);
     assert.strictEqual(stats.summoning_eye_list_price, 1_500_000);
@@ -1569,24 +1571,27 @@ test('dashboard account endpoints create and list registered minecraft accounts'
 
 test('dashboard account lists include computed wealth stats', async () => {
   const nowMs = Date.now();
+  let auctionItems = [
+    {
+      uuid: 'sold-dashboard-auction',
+      auctioneer: '00000000000000000000000000000901',
+      starting_bid: 24_999_000,
+      bin: true,
+      end: nowMs + 60_000,
+    },
+    {
+      uuid: 'other-dashboard-auction',
+      auctioneer: '00000000000000000000000000000999',
+      starting_bid: 99_999_000,
+      bin: true,
+      end: nowMs + 60_000,
+    },
+  ];
   const auctionIndex = {
     ensureFresh: async () => ({ source: 'cache', status: { ready: true } }),
     refresh: async () => ({ source: 'cache', status: { ready: true } }),
     getStatus: () => ({ ready: true }),
-    getItems: () => [
-      {
-        auctioneer: '00000000000000000000000000000901',
-        starting_bid: 24_999_000,
-        bin: true,
-        end: nowMs + 60_000,
-      },
-      {
-        auctioneer: '00000000000000000000000000000999',
-        starting_bid: 99_999_000,
-        bin: true,
-        end: nowMs + 60_000,
-      },
-    ],
+    getItems: () => auctionItems,
   };
   const { db, owner, server } = createTestServerWithOptions({
     auctionIndex,
@@ -1624,8 +1629,17 @@ test('dashboard account lists include computed wealth stats', async () => {
     assert.strictEqual(listedAccount.wealthStats.finalDestinationKills.minimum, 25_000);
     assert.strictEqual(
       listedAccount.wealthStats.expectedCoins,
-      listedAccount.wealthStats.estimatedPurse + listedAccount.wealthStats.ahListedValue + listedAccount.wealthStats.heldEyeValue + listedAccount.wealthStats.listedEyeValue
+      listedAccount.wealthStats.ahListedValue + listedAccount.wealthStats.heldEyeValue + listedAccount.wealthStats.listedEyeValue
     );
+
+    auctionItems = [];
+    const refreshed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: await loginDashboard(baseUrl) },
+    });
+    assert.strictEqual(refreshed.status, 200);
+    const refreshedAccount = (await refreshed.json()).accounts.find((row) => row.minecraft_username === 'EndMacroOne');
+    assert.strictEqual(refreshedAccount.wealthStats.auctionEvents[0].state, 'sold');
+    assert.strictEqual(refreshedAccount.wealthStats.auctionEvents[0].price, 24_999_000);
   } finally {
     await close(server);
   }

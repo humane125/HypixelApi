@@ -1,8 +1,8 @@
 # Test API Handoff
 
-Date: 2026-06-30
+Date: 2026-07-01
 Branch: `master`
-Latest local commit before this handoff: `edb7a31 Render account wealth stats`
+Latest local commit before this handoff: `b2cf301`
 
 ## Current Setup
 
@@ -20,8 +20,11 @@ Do not commit `.env`, `data/`, logs, real API keys, Discord webhooks, Discord us
 
 Test the account wealth dashboard with real macro accounts after deploying API/dashboard and copying the latest AutoAuction jar:
 
-- Open `/` and confirm each account card shows compact wealth stats: current estimate, expected total, held eyes, and lowest Final Destination armor kills.
-- Open `/remote/<minecraft_uuid_or_username>` and confirm the detailed Account Wealth panel shows purse, AH listings, held/listed eye values, expected total, and per-piece Final Destination kills.
+- Open `/` and confirm macroing accounts sort above Hypixel accounts, then active accounts, then offline/banned accounts.
+- Confirm `macroing` status badges/dots are purple and `hypixel` status badges/dots are orange.
+- Confirm each account card shows compact wealth stats: purse, expected future value, held eyes, and lowest Final Destination armor kills.
+- Open `/remote/<minecraft_uuid_or_username>` and confirm the detailed Account Wealth panel shows purse, sold auction credit, AH listings, held/listed eye values, expected future, current total, per-piece Final Destination kills, and recent sold/expired auction events.
+- While Nebula combat macro is on, confirm macro rates appear on the remote page and show session-only kills/hour, mob coins/hour, eyes/hour, FD value/hour, and total coins/hour.
 - Drop a Summoning Eye and confirm the account's held-eye count increments for that Minecraft account UUID.
 - Switch accounts through Alt Manager, then switch back. The original account's eye count should still belong to that original Minecraft UUID.
 - Create a Summoning Eye sell order and confirm held eyes move to listed eyes with the configured listed price.
@@ -29,6 +32,33 @@ Test the account wealth dashboard with real macro accounts after deploying API/d
 - Refresh the auction index after an armor auction disappears:
   - before its end time: value should move into `estimatedPurse`
   - after its end time: value should disappear from expected value without increasing purse
+
+## 2026-07-01 Changes
+
+- Added the `macroing` account wealth state from the 2026-06-30 plan:
+  - API persists macroing session baselines and latest samples in `minecraft_account_stats`.
+  - Mod `account_stats` payloads can mark an account as macroing.
+  - Dashboard treats live macroing accounts as their own status.
+  - Macroing accounts sort first, then Hypixel, then active, then offline/banned.
+  - Macroing status is purple; Hypixel status is orange.
+- Wealth totals were corrected:
+  - `expectedCoins` is now future value only: active AH listed value + held/listed Summoning Eye value.
+  - Current purse is shown separately.
+  - `currentTotalCoins` is purse + sold auction credit.
+  - `estimatedPurse` remains as a compatibility alias for current total.
+- Remote account wealth panel now shows:
+  - reported purse
+  - sold auction credit
+  - auction listings
+  - held/listed eye values
+  - expected future value
+  - current total
+  - macroing rates while macroing
+  - recent auction sold/expired events
+- Summoning Eye sell-order tracking now trusts the Bazaar sell-order quantity even if the eyes existed before the mod started tracking them.
+- API tests and frontend build passed locally:
+  - `npm test`
+  - `npm run build`
 
 Test the End lobby collision feature later with real AutoAuction macro instances. The API portion is pushed and deployed to the RDP, but the full behavior needs live mod verification.
 
@@ -77,7 +107,7 @@ Test scenario:
   - active/unexpired auctions count in `ahListedValue`
   - if an auction disappears before its end time, treat it as sold, subtract it from expected AH value, and add its value to `estimatedPurse`
   - if an auction disappears after its end time, treat it as expired/unsold and remove it from expected value without increasing purse
-  - expected total is `estimatedPurse + ahListedValue + heldEyeValue + listedEyeValue`
+  - expected future value is `ahListedValue + heldEyeValue + listedEyeValue`
 - Planned storage additions:
   - `minecraft_account_stats` for purse, FD kills, eye counts, listed-eye price, and sold auction credit
   - `minecraft_account_auction_snapshots` for auction UUID, account ID, price, end time, last seen, and state

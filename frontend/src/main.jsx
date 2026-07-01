@@ -201,7 +201,26 @@ function displayAccountStatus(account, nowMs) {
   if (account.status === 'banned' && account.ban_until && Date.parse(account.ban_until) <= nowMs) {
     return 'offline';
   }
+  if ((account.status === 'active' || account.status === 'hypixel') && account.wealthStats?.macroing) {
+    return 'macroing';
+  }
   return account.status;
+}
+
+function isLiveAccountStatus(status) {
+  return status === 'active' || status === 'hypixel' || status === 'macroing';
+}
+
+function accountStatusRank(account, nowMs) {
+  const status = displayAccountStatus(account, nowMs);
+  const ranks = {
+    macroing: 0,
+    hypixel: 1,
+    active: 2,
+    offline: 3,
+    banned: 4,
+  };
+  return ranks[status] ?? 5;
 }
 
 function isAccountInBannedFolder(account, nowMs) {
@@ -965,7 +984,7 @@ function RemoteLogPanel({ title, description, logs, emptyOnlineText, emptyOfflin
 function AccountWealthStrip({ stats }) {
   const fdMinimum = stats?.finalDestinationKills?.minimum;
   const items = [
-    { label: 'Current', value: formatCoins(stats?.estimatedPurse) },
+    { label: 'Purse', value: formatCoins(stats?.purse) },
     { label: 'Expected', value: formatCoins(stats?.expectedCoins) },
     { label: 'Eyes', value: formatStatNumber(stats?.summoningEyesHeld) },
     { label: 'FD', value: fdMinimum == null ? '-' : formatStatNumber(fdMinimum) },
@@ -984,13 +1003,16 @@ function AccountWealthStrip({ stats }) {
 
 function RemoteWealthPanel({ stats }) {
   const finalDestinationKills = stats?.finalDestinationKills || {};
+  const macroRates = stats?.macroRates || null;
+  const auctionEvents = Array.isArray(stats?.auctionEvents) ? stats.auctionEvents : [];
   const moneyRows = [
     ['Reported purse', stats?.purse],
-    ['Current estimate', stats?.estimatedPurse],
+    ['Sold auction credit', stats?.soldAuctionCredit],
     ['Auction listings', stats?.ahListedValue],
     ['Held eye value', stats?.heldEyeValue],
     ['Listed eye value', stats?.listedEyeValue],
-    ['Expected total', stats?.expectedCoins],
+    ['Expected future', stats?.expectedCoins],
+    ['Current total', stats?.currentTotalCoins],
   ];
   const fdRows = [
     ['Helmet', finalDestinationKills.helmet],
@@ -1060,6 +1082,48 @@ function RemoteWealthPanel({ stats }) {
           </div>
         </div>
       </div>
+      {macroRates ? (
+        <div className="remote-wealth-group remote-macro-group">
+          <div className="remote-wealth-group-head">
+            <Activity size={18} aria-hidden="true" />
+            <span>Macroing Rate</span>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Session</span>
+            <strong>{formatDuration(macroRates.elapsedMs)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Kills / h</span>
+            <strong>{formatStatNumber(macroRates.fdKillsPerHour)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Mob coins / h</span>
+            <strong>{formatCoins(macroRates.mobCoinsPerHour)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Eyes / h</span>
+            <strong>{formatStatNumber(macroRates.eyeDropsPerHour)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>FD value / h</span>
+            <strong>{formatCoins(macroRates.fdValuePerHour)}</strong>
+          </div>
+          <div className="remote-wealth-row">
+            <span>Total / h</span>
+            <strong>{formatCoins(macroRates.totalCoinsPerHour)}</strong>
+          </div>
+        </div>
+      ) : null}
+      {auctionEvents.length ? (
+        <div className="remote-auction-events">
+          {auctionEvents.map((event) => (
+            <div className={`remote-auction-event ${event.state}`} key={`${event.auctionUuid}:${event.updatedAt}`}>
+              <span>{event.state === 'sold' ? 'Auction sold' : 'Auction expired'}</span>
+              <strong>{event.state === 'sold' ? `+${formatCoins(event.price)}` : `Removed ${formatCoins(event.price)}`}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1076,7 +1140,7 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendA
   const lastError = state?.lastError || null;
   const isScreenshotLoading = Boolean(state?.isScreenshotLoading);
   const displayStatus = displayAccountStatus(account, nowMs);
-  const isOnline = displayStatus === 'active' || displayStatus === 'hypixel';
+  const isOnline = isLiveAccountStatus(displayStatus);
   const screenshotAgeTimestamp = screenshot?.receivedAt || screenshot?.capturedAt;
   const screenshotAgeMs = screenshotAgeTimestamp ? nowMs - Date.parse(screenshotAgeTimestamp) : null;
   const screenshotDataUrl = screenshot?.imageBase64
@@ -1919,7 +1983,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   }, [remoteAccount?.id]);
 
   useEffect(() => {
-    if (!remoteAccount || (remoteAccountStatus !== 'active' && remoteAccountStatus !== 'hypixel')) {
+    if (!remoteAccount || !isLiveAccountStatus(remoteAccountStatus)) {
       autoRefreshAccountRef.current = null;
       return undefined;
     }
@@ -1999,10 +2063,14 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     if (selectedAccountFolder === 'banned') return inBannedFolder;
     if (selectedAccountFolder === 'all') return !inBannedFolder;
     return !inBannedFolder && selectedAccountFolder === `owner:${accountOwnerFolder(account)}`;
-  });
+  }).sort((a, b) => (
+    accountStatusRank(a, nowMs) - accountStatusRank(b, nowMs)
+    || accountOwnerFolder(a).localeCompare(accountOwnerFolder(b))
+    || String(a.minecraft_username || '').localeCompare(String(b.minecraft_username || ''))
+  ));
   const connectedCount = accounts.filter((account) => {
     const status = displayAccountStatus(account, nowMs);
-    return status === 'active' || status === 'hypixel';
+    return isLiveAccountStatus(status);
   }).length;
   const hypixelCount = accounts.filter((account) => displayAccountStatus(account, nowMs) === 'hypixel').length;
   const bannedCount = accounts.filter((account) => isAccountInBannedFolder(account, nowMs)).length;
@@ -2256,7 +2324,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
                       <dd>
                         <span className={`status-badge live-status-badge ${displayStatus}`}>
                           <span className="status-word">{displayStatus}</span>
-                          {(displayStatus === 'active' || displayStatus === 'hypixel') && account.current_username ? (
+                          {isLiveAccountStatus(displayStatus) && account.current_username ? (
                             <span className="status-user">({account.current_username})</span>
                           ) : null}
                         </span>

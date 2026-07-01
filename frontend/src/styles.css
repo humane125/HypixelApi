@@ -10,6 +10,8 @@
   --gold: #c4a35f;
   --yellow: #c4a35f;
   --purple: #9b8fb8;
+  --macro: #b188ff;
+  --orange: #d79a4a;
   --mythic: #b8a6c9;
   --rare: #8ea2c6;
   --green: #7aa17d;
@@ -763,7 +765,11 @@ tbody tr:hover {
 }
 
 .hypixel {
-  color: var(--rare);
+  color: var(--orange);
+}
+
+.macroing {
+  color: var(--macro);
 }
 
 .epic {
@@ -876,7 +882,12 @@ tbody tr:hover {
 }
 
 .status-dot.hypixel {
-  background: var(--rare);
+  background: var(--orange);
+}
+
+.status-dot.macroing {
+  background: var(--macro);
+  box-shadow: 0 0 14px rgba(177, 136, 255, 0.52);
 }
 
 .status-dot.locked {
@@ -1659,6 +1670,12 @@ tbody tr:hover {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.remote-macro-group {
+  margin-top: 14px;
+  border-color: rgba(177, 136, 255, 0.28);
+  background: rgba(177, 136, 255, 0.055);
+}
+
 .remote-wealth-group-head {
   display: flex;
   align-items: center;
@@ -1691,6 +1708,39 @@ tbody tr:hover {
   color: var(--text);
   font-size: 0.86rem;
   text-align: right;
+}
+
+.remote-auction-events {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.remote-auction-event {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid rgba(98, 119, 145, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.remote-auction-event.sold {
+  border-color: rgba(85, 208, 144, 0.24);
+}
+
+.remote-auction-event.expired {
+  border-color: rgba(215, 154, 74, 0.28);
+}
+
+.remote-auction-event strong {
+  color: var(--text);
+  font-size: 0.86rem;
 }
 
 .remote-log-panel {

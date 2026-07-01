@@ -29,6 +29,7 @@ const {
   moveListedSummoningEyesToHeld,
   getMinecraftAccountStats,
   reconcileMinecraftAccountAuctionSnapshots,
+  listMinecraftAccountAuctionEvents,
 } = require('../auth-db');
 
 function test(name, fn) {
@@ -89,6 +90,24 @@ test('minecraft account wealth stats persist summoning eye counts', () => {
   assert.strictEqual(stats.summoning_eye_list_price, 1_200_000);
 });
 
+test('summoning eye sell offers trust listed quantity when held count is unknown', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Pretracked eye account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000904',
+    minecraftUsername: 'PretrackedEyeAccount',
+  });
+
+  moveSummoningEyesToListed(db, account.id, 18, 1_587_487);
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.summoning_eyes_held, 0);
+  assert.strictEqual(stats.summoning_eyes_listed, 18);
+  assert.strictEqual(stats.summoning_eye_list_price, 1_587_487);
+});
+
 test('cancelled summoning eye sell offers move listed eyes back to held', () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });
@@ -107,6 +126,47 @@ test('cancelled summoning eye sell offers move listed eyes back to held', () => 
   assert.strictEqual(stats.summoning_eyes_held, 10);
   assert.strictEqual(stats.summoning_eyes_listed, 8);
   assert.strictEqual(stats.summoning_eye_list_price, 1_587_487);
+});
+
+test('macroing account stats keep session baselines and latest samples', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Macro account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000903',
+    minecraftUsername: 'MacroAccount',
+  });
+
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_000_000,
+    fdHelmetKills: 100,
+    fdChestplateKills: 100,
+    fdLeggingsKills: 100,
+    fdBootsKills: 100,
+    macroing: true,
+  }, { now: '2026-07-01T00:00:00.000Z' });
+  incrementSummoningEyes(db, account.id, 2, { now: '2026-07-01T00:10:00.000Z' });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 1_030_000,
+    fdHelmetKills: 121,
+    fdChestplateKills: 121,
+    fdLeggingsKills: 121,
+    fdBootsKills: 121,
+    macroing: true,
+  }, { now: '2026-07-01T00:30:00.000Z' });
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.macroing, 1);
+  assert.strictEqual(stats.macro_started_at, '2026-07-01T00:00:00.000Z');
+  assert.strictEqual(stats.macro_last_sample_at, '2026-07-01T00:30:00.000Z');
+  assert.strictEqual(stats.macro_base_purse, 1_000_000);
+  assert.strictEqual(stats.macro_last_purse, 1_030_000);
+  assert.strictEqual(stats.macro_base_fd_minimum, 100);
+  assert.strictEqual(stats.macro_last_fd_minimum, 121);
+  assert.strictEqual(stats.macro_base_eye_drops, 0);
+  assert.strictEqual(stats.macro_last_eye_drops, 2);
+  assert.strictEqual(stats.summoning_eye_drops_total, 2);
 });
 
 test('minecraft account auction snapshots credit sold auctions only before expiry', () => {
@@ -153,6 +213,18 @@ test('minecraft account auction snapshots credit sold auctions only before expir
 
   reconcileMinecraftAccountAuctionSnapshots(db, [soldAccount, expiredAccount], [], { nowMs: 2_000 });
   assert.strictEqual(getMinecraftAccountStats(db, expiredAccount.id).sold_auction_credit, 0);
+
+  const soldEvents = listMinecraftAccountAuctionEvents(db, soldAccount.id, 5);
+  assert.strictEqual(soldEvents.length, 1);
+  assert.strictEqual(soldEvents[0].auctionUuid, 'sold-auction');
+  assert.strictEqual(soldEvents[0].state, 'sold');
+  assert.strictEqual(soldEvents[0].price, 24_999_000);
+
+  const expiredEvents = listMinecraftAccountAuctionEvents(db, expiredAccount.id, 5);
+  assert.strictEqual(expiredEvents.length, 1);
+  assert.strictEqual(expiredEvents[0].auctionUuid, 'expired-auction');
+  assert.strictEqual(expiredEvents[0].state, 'expired');
+  assert.strictEqual(expiredEvents[0].price, 10_000_000);
 });
 
 test('revoked and invalid api keys cannot authenticate', () => {

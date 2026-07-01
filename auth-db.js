@@ -121,7 +121,17 @@ function migrateDatabase(db) {
       summoning_eyes_held INTEGER NOT NULL DEFAULT 0,
       summoning_eyes_listed INTEGER NOT NULL DEFAULT 0,
       summoning_eye_list_price INTEGER NOT NULL DEFAULT 0,
+      summoning_eye_drops_total INTEGER NOT NULL DEFAULT 0,
       sold_auction_credit INTEGER NOT NULL DEFAULT 0,
+      macroing INTEGER NOT NULL DEFAULT 0,
+      macro_started_at TEXT,
+      macro_last_sample_at TEXT,
+      macro_base_purse INTEGER NOT NULL DEFAULT 0,
+      macro_last_purse INTEGER NOT NULL DEFAULT 0,
+      macro_base_fd_minimum INTEGER,
+      macro_last_fd_minimum INTEGER,
+      macro_base_eye_drops INTEGER NOT NULL DEFAULT 0,
+      macro_last_eye_drops INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -214,6 +224,25 @@ function migrateDatabase(db) {
   }
   if (!accountColumns.includes('current_user_id')) {
     db.exec('ALTER TABLE minecraft_accounts ADD COLUMN current_user_id INTEGER');
+  }
+
+  const statColumns = db.prepare('PRAGMA table_info(minecraft_account_stats)').all().map((column) => column.name);
+  const statColumnAdds = {
+    summoning_eye_drops_total: 'ALTER TABLE minecraft_account_stats ADD COLUMN summoning_eye_drops_total INTEGER NOT NULL DEFAULT 0',
+    macroing: 'ALTER TABLE minecraft_account_stats ADD COLUMN macroing INTEGER NOT NULL DEFAULT 0',
+    macro_started_at: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_started_at TEXT',
+    macro_last_sample_at: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_last_sample_at TEXT',
+    macro_base_purse: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_base_purse INTEGER NOT NULL DEFAULT 0',
+    macro_last_purse: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_last_purse INTEGER NOT NULL DEFAULT 0',
+    macro_base_fd_minimum: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_base_fd_minimum INTEGER',
+    macro_last_fd_minimum: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_last_fd_minimum INTEGER',
+    macro_base_eye_drops: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_base_eye_drops INTEGER NOT NULL DEFAULT 0',
+    macro_last_eye_drops: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_last_eye_drops INTEGER NOT NULL DEFAULT 0',
+  };
+  for (const [column, sql] of Object.entries(statColumnAdds)) {
+    if (!statColumns.includes(column)) {
+      db.exec(sql);
+    }
   }
 }
 
@@ -657,7 +686,17 @@ function defaultMinecraftAccountStats(accountId) {
     summoning_eyes_held: 0,
     summoning_eyes_listed: 0,
     summoning_eye_list_price: 0,
+    summoning_eye_drops_total: 0,
     sold_auction_credit: 0,
+    macroing: 0,
+    macro_started_at: null,
+    macro_last_sample_at: null,
+    macro_base_purse: 0,
+    macro_last_purse: 0,
+    macro_base_fd_minimum: null,
+    macro_last_fd_minimum: null,
+    macro_base_eye_drops: 0,
+    macro_last_eye_drops: 0,
     updated_at: null,
   };
 }
@@ -675,29 +714,75 @@ function getMinecraftAccountStats(db, accountId) {
   return row || defaultMinecraftAccountStats(accountId);
 }
 
-function upsertMinecraftAccountStats(db, accountId, patch = {}) {
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function minimumFinalDestinationKills(stats) {
+  const values = [
+    stats.fd_helmet_kills,
+    stats.fd_chestplate_kills,
+    stats.fd_leggings_kills,
+    stats.fd_boots_kills,
+  ].filter((value) => value != null);
+  return values.length ? Math.min(...values.map((value) => safeNonNegativeInteger(value))) : null;
+}
+
+function upsertMinecraftAccountStats(db, accountId, patch = {}, options = {}) {
   const existing = getMinecraftAccountStats(db, accountId);
+  const timestamp = options.now || nowIso();
   const next = {
-    purse: Object.prototype.hasOwnProperty.call(patch, 'purse')
+    purse: hasOwn(patch, 'purse')
       ? nullableNonNegativeInteger(patch.purse)
       : existing.purse,
-    fd_helmet_kills: Object.prototype.hasOwnProperty.call(patch, 'fdHelmetKills')
+    fd_helmet_kills: hasOwn(patch, 'fdHelmetKills')
       ? nullableNonNegativeInteger(patch.fdHelmetKills)
       : existing.fd_helmet_kills,
-    fd_chestplate_kills: Object.prototype.hasOwnProperty.call(patch, 'fdChestplateKills')
+    fd_chestplate_kills: hasOwn(patch, 'fdChestplateKills')
       ? nullableNonNegativeInteger(patch.fdChestplateKills)
       : existing.fd_chestplate_kills,
-    fd_leggings_kills: Object.prototype.hasOwnProperty.call(patch, 'fdLeggingsKills')
+    fd_leggings_kills: hasOwn(patch, 'fdLeggingsKills')
       ? nullableNonNegativeInteger(patch.fdLeggingsKills)
       : existing.fd_leggings_kills,
-    fd_boots_kills: Object.prototype.hasOwnProperty.call(patch, 'fdBootsKills')
+    fd_boots_kills: hasOwn(patch, 'fdBootsKills')
       ? nullableNonNegativeInteger(patch.fdBootsKills)
       : existing.fd_boots_kills,
-    summoning_eyes_held: Object.prototype.hasOwnProperty.call(patch, 'summoningEyesHeld')
+    summoning_eyes_held: hasOwn(patch, 'summoningEyesHeld')
       ? safeNonNegativeInteger(patch.summoningEyesHeld)
       : existing.summoning_eyes_held,
-    updated_at: nowIso(),
+    updated_at: timestamp,
   };
+  const eyeDropsTotal = safeNonNegativeInteger(existing.summoning_eye_drops_total);
+  const nextFdMinimum = minimumFinalDestinationKills(next);
+  const nextMacroing = hasOwn(patch, 'macroing')
+    ? Boolean(patch.macroing)
+    : safeNonNegativeInteger(existing.macroing) === 1;
+  const currentPurse = safeNonNegativeInteger(next.purse);
+  let macro = {
+    macroing: 0,
+    macro_started_at: null,
+    macro_last_sample_at: null,
+    macro_base_purse: currentPurse,
+    macro_last_purse: currentPurse,
+    macro_base_fd_minimum: nextFdMinimum,
+    macro_last_fd_minimum: nextFdMinimum,
+    macro_base_eye_drops: eyeDropsTotal,
+    macro_last_eye_drops: eyeDropsTotal,
+  };
+  if (nextMacroing) {
+    const existingMacroing = safeNonNegativeInteger(existing.macroing) === 1 && existing.macro_started_at;
+    macro = {
+      macroing: 1,
+      macro_started_at: existingMacroing ? existing.macro_started_at : timestamp,
+      macro_last_sample_at: timestamp,
+      macro_base_purse: existingMacroing ? safeNonNegativeInteger(existing.macro_base_purse) : currentPurse,
+      macro_last_purse: currentPurse,
+      macro_base_fd_minimum: existingMacroing ? nullableNonNegativeInteger(existing.macro_base_fd_minimum) : nextFdMinimum,
+      macro_last_fd_minimum: nextFdMinimum,
+      macro_base_eye_drops: existingMacroing ? safeNonNegativeInteger(existing.macro_base_eye_drops) : eyeDropsTotal,
+      macro_last_eye_drops: eyeDropsTotal,
+    };
+  }
   db.prepare(`
     INSERT INTO minecraft_account_stats (
       minecraft_account_id,
@@ -707,9 +792,19 @@ function upsertMinecraftAccountStats(db, accountId, patch = {}) {
       fd_leggings_kills,
       fd_boots_kills,
       summoning_eyes_held,
+      summoning_eye_drops_total,
+      macroing,
+      macro_started_at,
+      macro_last_sample_at,
+      macro_base_purse,
+      macro_last_purse,
+      macro_base_fd_minimum,
+      macro_last_fd_minimum,
+      macro_base_eye_drops,
+      macro_last_eye_drops,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(minecraft_account_id) DO UPDATE SET
       purse = excluded.purse,
       fd_helmet_kills = excluded.fd_helmet_kills,
@@ -717,6 +812,16 @@ function upsertMinecraftAccountStats(db, accountId, patch = {}) {
       fd_leggings_kills = excluded.fd_leggings_kills,
       fd_boots_kills = excluded.fd_boots_kills,
       summoning_eyes_held = excluded.summoning_eyes_held,
+      summoning_eye_drops_total = excluded.summoning_eye_drops_total,
+      macroing = excluded.macroing,
+      macro_started_at = excluded.macro_started_at,
+      macro_last_sample_at = excluded.macro_last_sample_at,
+      macro_base_purse = excluded.macro_base_purse,
+      macro_last_purse = excluded.macro_last_purse,
+      macro_base_fd_minimum = excluded.macro_base_fd_minimum,
+      macro_last_fd_minimum = excluded.macro_last_fd_minimum,
+      macro_base_eye_drops = excluded.macro_base_eye_drops,
+      macro_last_eye_drops = excluded.macro_last_eye_drops,
       updated_at = excluded.updated_at
   `).run(
     accountId,
@@ -726,28 +831,46 @@ function upsertMinecraftAccountStats(db, accountId, patch = {}) {
     next.fd_leggings_kills,
     next.fd_boots_kills,
     next.summoning_eyes_held,
+    eyeDropsTotal,
+    macro.macroing,
+    macro.macro_started_at,
+    macro.macro_last_sample_at,
+    macro.macro_base_purse,
+    macro.macro_last_purse,
+    macro.macro_base_fd_minimum,
+    macro.macro_last_fd_minimum,
+    macro.macro_base_eye_drops,
+    macro.macro_last_eye_drops,
     next.updated_at
   );
   return getMinecraftAccountStats(db, accountId);
 }
 
-function incrementSummoningEyes(db, accountId, delta) {
+function incrementSummoningEyes(db, accountId, delta, options = {}) {
   const existing = getMinecraftAccountStats(db, accountId);
-  const nextHeld = Math.max(0, safeNonNegativeInteger(existing.summoning_eyes_held) + Math.floor(Number(delta || 0)));
+  const timestamp = options.now || nowIso();
+  const cleanDelta = Math.floor(Number(delta || 0));
+  const nextHeld = Math.max(0, safeNonNegativeInteger(existing.summoning_eyes_held) + cleanDelta);
+  const nextDropsTotal = safeNonNegativeInteger(existing.summoning_eye_drops_total) + Math.max(0, cleanDelta);
   ensureMinecraftAccountStatsRow(db, accountId);
   db.prepare(`
     UPDATE minecraft_account_stats
-    SET summoning_eyes_held = ?, updated_at = ?
+    SET summoning_eyes_held = ?,
+        summoning_eye_drops_total = ?,
+        macro_last_eye_drops = CASE WHEN macroing = 1 THEN ? ELSE macro_last_eye_drops END,
+        macro_last_sample_at = CASE WHEN macroing = 1 THEN ? ELSE macro_last_sample_at END,
+        updated_at = ?
     WHERE minecraft_account_id = ?
-  `).run(nextHeld, nowIso(), accountId);
+  `).run(nextHeld, nextDropsTotal, nextDropsTotal, timestamp, timestamp, accountId);
   return getMinecraftAccountStats(db, accountId);
 }
 
 function moveSummoningEyesToListed(db, accountId, quantity, pricePerEye) {
   const existing = getMinecraftAccountStats(db, accountId);
-  const moveQuantity = Math.min(safeNonNegativeInteger(quantity), safeNonNegativeInteger(existing.summoning_eyes_held));
-  const nextHeld = safeNonNegativeInteger(existing.summoning_eyes_held) - moveQuantity;
-  const nextListed = safeNonNegativeInteger(existing.summoning_eyes_listed) + moveQuantity;
+  const listedQuantity = safeNonNegativeInteger(quantity);
+  const heldReduction = Math.min(listedQuantity, safeNonNegativeInteger(existing.summoning_eyes_held));
+  const nextHeld = safeNonNegativeInteger(existing.summoning_eyes_held) - heldReduction;
+  const nextListed = safeNonNegativeInteger(existing.summoning_eyes_listed) + listedQuantity;
   ensureMinecraftAccountStatsRow(db, accountId);
   db.prepare(`
     UPDATE minecraft_account_stats
@@ -882,6 +1005,23 @@ function reconcileMinecraftAccountAuctionSnapshots(db, accounts = [], activeAuct
   }
 
   return { tracked, sold, expired };
+}
+
+function listMinecraftAccountAuctionEvents(db, accountId, limit = 5) {
+  const cleanLimit = Math.min(25, Math.max(1, safeNonNegativeInteger(limit, 5)));
+  return db.prepare(`
+    SELECT
+      auction_uuid AS auctionUuid,
+      state,
+      price,
+      end_ms AS endMs,
+      last_seen_at AS updatedAt
+    FROM minecraft_account_auction_snapshots
+    WHERE minecraft_account_id = ?
+      AND state IN ('sold', 'expired')
+    ORDER BY last_seen_at DESC
+    LIMIT ?
+  `).all(accountId, cleanLimit);
 }
 
 function normalizeProxyType(value) {
@@ -1284,6 +1424,7 @@ module.exports = {
   clearListedSummoningEyes,
   moveListedSummoningEyesToHeld,
   reconcileMinecraftAccountAuctionSnapshots,
+  listMinecraftAccountAuctionEvents,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
