@@ -790,8 +790,7 @@ test('mod websocket auction collection chat credits sold armor listing', async (
     });
     const afterAccount = (await listedAfter.json()).accounts.find((row) => row.minecraft_username === 'AuctionCollectPlayer');
     assert.strictEqual(afterAccount.wealthStats.soldAuctionCredit, 0);
-    assert.strictEqual(afterAccount.wealthStats.collectedAuctionCredit, 24_749_010);
-    assert.strictEqual(afterAccount.wealthStats.currentTotalCoins, 24_749_010);
+    assert.strictEqual(afterAccount.wealthStats.currentTotalCoins, 0);
     assert.strictEqual(afterAccount.wealthStats.ahListedValue, 0);
     assert.strictEqual(afterAccount.wealthStats.expectedCoins, 0);
     assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].itemName, 'Fierce Final Destination Leggings');

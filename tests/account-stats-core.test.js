@@ -18,7 +18,6 @@ test('expected coins exclude purse and include future value only', () => {
     stats: {
       purse: 10_000_000,
       sold_auction_credit: 24_999_000,
-      collected_auction_credit: 3_000_000,
       summoning_eyes_held: 2,
       summoning_eyes_listed: 1,
       summoning_eye_list_price: 1_500_000,
@@ -32,10 +31,9 @@ test('expected coins exclude purse and include future value only', () => {
   });
 
   assert.strictEqual(result.purse, 10_000_000);
-  assert.strictEqual(result.estimatedPurse, 13_000_000);
-  assert.strictEqual(result.currentTotalCoins, 13_000_000);
+  assert.strictEqual(result.estimatedPurse, 10_000_000);
+  assert.strictEqual(result.currentTotalCoins, 10_000_000);
   assert.strictEqual(result.soldAuctionCredit, 24_999_000);
-  assert.strictEqual(result.collectedAuctionCredit, 3_000_000);
   assert.strictEqual(result.ahListedValue, 24_999_000);
   assert.ok(result.heldEyeValue > 0);
   assert.strictEqual(result.listedEyeValue, 1_500_000);
@@ -65,7 +63,6 @@ test('resolved auction ids are excluded from listed expected coins', () => {
     stats: {
       purse: 10_000_000,
       sold_auction_credit: 24_749_010,
-      collected_auction_credit: 1_000_000,
     },
     activeAuctions: [
       {
@@ -83,7 +80,7 @@ test('resolved auction ids are excluded from listed expected coins', () => {
 
   assert.strictEqual(result.ahListedValue, 0);
   assert.strictEqual(result.expectedCoins, 24_749_010);
-  assert.strictEqual(result.currentTotalCoins, 11_000_000);
+  assert.strictEqual(result.currentTotalCoins, 10_000_000);
 });
 
 test('macroing rates use session deltas only while macroing', () => {

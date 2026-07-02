@@ -66,8 +66,7 @@ function computeAccountWealthStats({
   const resolvedAuctionUuidSet = new Set((resolvedAuctionUuids || []).map(cleanAuctionUuid).filter(Boolean));
   const purse = numberValue(stats.purse);
   const soldAuctionCredit = numberValue(stats.sold_auction_credit);
-  const collectedAuctionCredit = numberValue(stats.collected_auction_credit);
-  const currentTotalCoins = purse + collectedAuctionCredit;
+  const currentTotalCoins = purse;
   const estimatedPurse = currentTotalCoins;
   const ahListedValue = activeAuctions
     .filter((auction) => normalizeUuid(auction.auctioneer) === uuid)
@@ -89,7 +88,6 @@ function computeAccountWealthStats({
   return {
     purse,
     soldAuctionCredit,
-    collectedAuctionCredit,
     currentTotalCoins,
     estimatedPurse,
     ahListedValue,

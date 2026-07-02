@@ -1038,7 +1038,6 @@ function RemoteWealthPanel({ stats }) {
   const moneyRows = [
     ['Reported purse', stats?.purse],
     ['Sold auction credit', stats?.soldAuctionCredit],
-    ['Collected auction credit', stats?.collectedAuctionCredit],
     ['Auction listings', stats?.ahListedValue],
     ['Held eye value', stats?.heldEyeValue],
     ['Listed eye value', stats?.listedEyeValue],

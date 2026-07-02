@@ -353,7 +353,6 @@ test('auction collection chat credits sold amount and records item name once', (
   assert.strictEqual(recorded.credited, true);
   let stats = getMinecraftAccountStats(db, account.id);
   assert.strictEqual(stats.sold_auction_credit, 0);
-  assert.strictEqual(stats.collected_auction_credit, 24_749_010);
 
   const duplicate = recordMinecraftAccountAuctionCollection(db, account.id, {
     itemName: 'Fierce Final Destination Chestplate',
@@ -364,7 +363,6 @@ test('auction collection chat credits sold amount and records item name once', (
   assert.strictEqual(duplicate.credited, false);
   stats = getMinecraftAccountStats(db, account.id);
   assert.strictEqual(stats.sold_auction_credit, 0);
-  assert.strictEqual(stats.collected_auction_credit, 24_749_010);
 
   const events = listMinecraftAccountAuctionEvents(db, account.id, 5);
   assert.strictEqual(events.length, 1);

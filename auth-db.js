@@ -1112,10 +1112,9 @@ function recordMinecraftAccountAuctionCollection(db, accountId, {
             WHEN sold_auction_credit > ? THEN sold_auction_credit - ?
             ELSE 0
           END,
-          collected_auction_credit = collected_auction_credit + ?,
           updated_at = ?
       WHERE minecraft_account_id = ?
-    `).run(pendingReduction, pendingReduction, cleanPrice, timestamp, accountId);
+    `).run(pendingReduction, pendingReduction, timestamp, accountId);
     return {
       credited: true,
       event: db.prepare('SELECT * FROM minecraft_account_auction_snapshots WHERE auction_uuid = ?').get(existing.auction_uuid),
@@ -1154,10 +1153,9 @@ function recordMinecraftAccountAuctionCollection(db, accountId, {
   if (inserted.changes > 0) {
     db.prepare(`
       UPDATE minecraft_account_stats
-      SET collected_auction_credit = collected_auction_credit + ?,
-          updated_at = ?
+      SET updated_at = ?
       WHERE minecraft_account_id = ?
-    `).run(cleanPrice, timestamp, accountId);
+    `).run(timestamp, accountId);
   }
   return {
     credited: inserted.changes > 0,
