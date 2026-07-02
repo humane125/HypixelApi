@@ -50,9 +50,11 @@ const {
   writeAuditLog,
 } = require('./auth-db');
 const { normalizeUuid, computeAccountWealthStats } = require('./account-stats-core');
+const { listModReleases, findModReleaseFile } = require('./mod-releases-core');
 
 const DEFAULT_PORT = 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const DEFAULT_MOD_RELEASE_DIR = process.env.MOD_RELEASE_DIR || 'C:\\Humane\\ModReleases';
 const HYPIXEL_AUCTIONS_URL = 'https://api.hypixel.net/v2/skyblock/auctions';
 const HYPIXEL_BAZAAR_URL = 'https://api.hypixel.net/v2/skyblock/bazaar';
 const DEFAULT_LOGIN_RATE_LIMIT = {
@@ -1888,6 +1890,7 @@ function createAppServer(options = {}) {
     ? null
     : createLoginRateLimiter(options.loginRateLimit);
   const secureCookies = options.secureCookies;
+  const releaseDir = options.releaseDir || process.env.MOD_RELEASE_DIR || DEFAULT_MOD_RELEASE_DIR;
 
   const accountHeartbeatWindowMs = options.accountHeartbeatWindowMs || DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS;
   let getLiveAccountStatuses = () => [];
@@ -2248,6 +2251,42 @@ function createAppServer(options = {}) {
       }
       await refreshAuctionIndexForDashboardAccounts();
       writeJson(res, 200, { accounts: listDashboardMinecraftAccounts() });
+      return;
+    }
+
+    if (pathname === '/api/dashboard/mod-releases' && req.method === 'GET') {
+      const access = authorizeDashboard(req);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      const releases = listModReleases(releaseDir).map((release) => ({
+        ...release,
+        downloadUrl: `/api/dashboard/mod-releases/${encodeURIComponent(release.filename)}/download`,
+      }));
+      writeJson(res, 200, { releases });
+      return;
+    }
+
+    const releaseDownloadMatch = pathname.match(/^\/api\/dashboard\/mod-releases\/([^/]+)\/download$/);
+    if (releaseDownloadMatch && req.method === 'GET') {
+      const access = authorizeDashboard(req);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      const filename = decodeURIComponent(releaseDownloadMatch[1] || '');
+      const filePath = findModReleaseFile(releaseDir, filename);
+      if (!filePath) {
+        writeJson(res, 404, { error: 'Mod release not found' });
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/java-archive',
+        'Content-Disposition': `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`,
+        'Cache-Control': 'private, max-age=0, must-revalidate',
+      });
+      fs.createReadStream(filePath).pipe(res);
       return;
     }
 

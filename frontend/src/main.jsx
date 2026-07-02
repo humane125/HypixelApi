@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   Clock,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   Gavel,
@@ -161,6 +162,14 @@ function formatCoins(value, fallback = '0') {
 function formatStatNumber(value, fallback = '-') {
   const number = Number(value);
   return Number.isFinite(number) ? formatNumber(number) : fallback;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.floor(bytes)} B`;
 }
 
 function formatTimestamp(value) {
@@ -1387,6 +1396,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const [me, setMe] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [accounts, setAccounts] = useState([]);
+  const [modReleases, setModReleases] = useState([]);
   const [apiKeys, setApiKeys] = useState([]);
   const [dashboardUsers, setDashboardUsers] = useState([]);
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
@@ -1417,9 +1427,10 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [meBody, accountsBody] = await Promise.all([
+      const [meBody, accountsBody, releasesBody] = await Promise.all([
         apiFetch('/api/dashboard/me', null),
         apiFetch('/api/dashboard/accounts', null),
+        apiFetch('/api/dashboard/mod-releases', null),
       ]);
       const keysBody = meBody.user.role === 'owner'
         ? await apiFetch('/api/dashboard/api-keys', null)
@@ -1429,6 +1440,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
         : { users: [] };
       setMe(meBody.user);
       setAccounts(accountsBody.accounts || []);
+      setModReleases(releasesBody.releases || []);
       setProxyDrafts(proxyDraftsFromAccounts(accountsBody.accounts || []));
       setApiKeys(keysBody.apiKeys || []);
       setDashboardUsers(usersBody.users || []);
@@ -1436,6 +1448,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     } catch (err) {
       setMe(null);
       setAccounts([]);
+      setModReleases([]);
       setProxyDrafts({});
       setActiveProxyAccountId(null);
       setLiveControlByAccountId({});
@@ -2123,6 +2136,36 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
         <StatCard title="Hypixel Active" value={formatNumber(hypixelCount)} detail="Currently on Hypixel" variant="mythic" icon={Activity} />
         <StatCard title="Banned Folder" value={formatNumber(bannedCount)} detail="Held outside active rotation" variant="legendary" icon={Ban} />
         <StatCard title="Active API Keys" value={formatNumber(activeKeyCount)} detail={`${formatNumber(apiKeys.length)} total keys`} variant="recommendation" icon={KeyRound} />
+      </section>
+
+      <section className="results-panel mod-downloads-panel">
+        <div className="section-heading">
+          <div>
+            <h2>Mod Downloads</h2>
+            <p className="muted">Latest jars copied to the RDP release folder.</p>
+          </div>
+          <span className="pill">{modReleases.length} files</span>
+        </div>
+        {modReleases.length ? (
+          <div className="mod-release-grid">
+            {modReleases.map((release) => (
+              <article className="mod-release-card" key={release.filename}>
+                <div className="release-icon" aria-hidden="true"><FileText size={18} /></div>
+                <div className="release-main">
+                  <h3>{release.modName}</h3>
+                  <code>{release.filename}</code>
+                  <p className="muted">{formatBytes(release.sizeBytes)} - Updated {formatTimestamp(release.updatedAt)}</p>
+                  <span className="release-checksum">SHA256 {String(release.sha256 || '').slice(0, 12)}</span>
+                </div>
+                <a className="btn primary compact" href={release.downloadUrl} download>
+                  <Download size={15} aria-hidden="true" />Download
+                </a>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-cell">No jars found in the release folder</div>
+        )}
       </section>
 
       <section className="dashboard-workspace">

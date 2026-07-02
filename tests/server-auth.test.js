@@ -1436,6 +1436,45 @@ test('dashboard account list marks stale live heartbeat accounts offline', async
   }
 });
 
+test('dashboard mod releases require login and download jars from configured folder', async () => {
+  const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-mod-releases-'));
+  fs.writeFileSync(path.join(releaseDir, 'autoauction-1.0.0.jar'), 'autoauction jar');
+  fs.writeFileSync(path.join(releaseDir, 'notes.txt'), 'not downloadable');
+  const { server } = createTestServerWithOptions({ releaseDir });
+  const baseUrl = await listen(server);
+  try {
+    const denied = await fetch(`${baseUrl}/api/dashboard/mod-releases`);
+    assert.strictEqual(denied.status, 401);
+
+    const cookie = await loginDashboard(baseUrl);
+    const listed = await fetch(`${baseUrl}/api/dashboard/mod-releases`, {
+      headers: { Cookie: cookie },
+    });
+    assert.strictEqual(listed.status, 200);
+    const body = await listed.json();
+    assert.strictEqual(body.releases.length, 1);
+    assert.strictEqual(body.releases[0].filename, 'autoauction-1.0.0.jar');
+    assert.strictEqual(body.releases[0].modName, 'AutoAuction');
+    assert.ok(body.releases[0].downloadUrl.includes('/api/dashboard/mod-releases/autoauction-1.0.0.jar/download'));
+
+    const downloaded = await fetch(`${baseUrl}${body.releases[0].downloadUrl}`, {
+      headers: { Cookie: cookie },
+    });
+    assert.strictEqual(downloaded.status, 200);
+    assert.strictEqual(downloaded.headers.get('content-type'), 'application/java-archive');
+    assert.strictEqual(downloaded.headers.get('content-disposition'), 'attachment; filename="autoauction-1.0.0.jar"');
+    assert.strictEqual(await downloaded.text(), 'autoauction jar');
+
+    const traversal = await fetch(`${baseUrl}/api/dashboard/mod-releases/..%2Fserver.js/download`, {
+      headers: { Cookie: cookie },
+    });
+    assert.strictEqual(traversal.status, 404);
+  } finally {
+    await close(server);
+    fs.rmSync(releaseDir, { recursive: true, force: true });
+  }
+});
+
 async function loginDashboard(baseUrl, username = 'owner', password = 'owner-password') {
   const login = await fetch(`${baseUrl}/api/dashboard/login`, {
     method: 'POST',

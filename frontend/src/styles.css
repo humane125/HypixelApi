@@ -510,6 +510,66 @@ textarea:focus {
   overflow: hidden;
 }
 
+.mod-downloads-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.mod-release-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.mod-release-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid rgba(98, 119, 145, 0.22);
+  border-radius: 8px;
+  background: rgba(7, 11, 17, 0.54);
+}
+
+.release-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--blue);
+  background: rgba(82, 136, 255, 0.12);
+  border: 1px solid rgba(82, 136, 255, 0.22);
+}
+
+.release-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.release-main h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.release-main code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.release-main p {
+  margin: 0;
+}
+
+.release-checksum {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
 .account-panel {
   grid-column: 1 / -1;
   order: 1;
