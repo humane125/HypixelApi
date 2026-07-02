@@ -1010,6 +1010,25 @@ function AccountWealthStrip({ stats }) {
   );
 }
 
+function auctionEventIcon(event) {
+  const itemName = String(event?.itemName || '').toLowerCase();
+  if (itemName.includes('final destination')) {
+    if (itemName.includes('helmet')) return fdHelmetIcon;
+    if (itemName.includes('chestplate')) return fdChestplateIcon;
+    if (itemName.includes('leggings')) return fdLeggingsIcon;
+    if (itemName.includes('boots')) return fdBootsIcon;
+  }
+  return coinGoldIcon;
+}
+
+function auctionEventTitle(event) {
+  const itemName = String(event?.itemName || '').trim();
+  if (itemName) {
+    return event.state === 'sold' ? `${itemName} sold` : `${itemName} expired`;
+  }
+  return event.state === 'sold' ? 'Auction sold' : 'Auction expired';
+}
+
 function RemoteWealthPanel({ stats }) {
   const finalDestinationKills = stats?.finalDestinationKills || {};
   const macroRates = stats?.macroRates || null;
@@ -1127,7 +1146,10 @@ function RemoteWealthPanel({ stats }) {
         <div className="remote-auction-events">
           {auctionEvents.map((event) => (
             <div className={`remote-auction-event ${event.state}`} key={`${event.auctionUuid}:${event.updatedAt}`}>
-              <span>{event.state === 'sold' ? 'Auction sold' : 'Auction expired'}</span>
+              <span className="remote-auction-event-title">
+                <img className="remote-auction-event-icon" src={auctionEventIcon(event)} alt="" aria-hidden="true" />
+                <span>{auctionEventTitle(event)}</span>
+              </span>
               <strong>{event.state === 'sold' ? `+${formatCoins(event.price)}` : `Removed ${formatCoins(event.price)}`}</strong>
             </div>
           ))}

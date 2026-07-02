@@ -138,6 +138,7 @@ function migrateDatabase(db) {
     CREATE TABLE IF NOT EXISTS minecraft_account_auction_snapshots (
       auction_uuid TEXT PRIMARY KEY,
       minecraft_account_id INTEGER NOT NULL REFERENCES minecraft_accounts(id) ON DELETE CASCADE,
+      item_name TEXT,
       price INTEGER NOT NULL,
       end_ms INTEGER NOT NULL,
       last_seen_at TEXT NOT NULL,
@@ -243,6 +244,11 @@ function migrateDatabase(db) {
     if (!statColumns.includes(column)) {
       db.exec(sql);
     }
+  }
+
+  const auctionSnapshotColumns = db.prepare('PRAGMA table_info(minecraft_account_auction_snapshots)').all().map((column) => column.name);
+  if (!auctionSnapshotColumns.includes('item_name')) {
+    db.exec('ALTER TABLE minecraft_account_auction_snapshots ADD COLUMN item_name TEXT');
   }
 }
 
@@ -933,6 +939,18 @@ function cleanAuctionSnapshotId(auction) {
   return String(auction?.uuid || auction?.auction_uuid || auction?.id || '').trim();
 }
 
+function cleanAuctionItemName(value) {
+  return String(value || '').replace(/(?:\u00a7|&)[0-9a-fk-or]/gi, '').trim();
+}
+
+function normalizedAuctionItemName(value) {
+  return cleanAuctionItemName(value).toLowerCase().replace(/\s+/g, ' ');
+}
+
+function auctionItemName(auction) {
+  return cleanAuctionItemName(auction?.item_name || auction?.itemName || auction?.displayName);
+}
+
 function auctionEndMs(auction) {
   const number = Number(auction?.end ?? auction?.end_ms ?? auction?.endsAt);
   return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0;
@@ -968,19 +986,27 @@ function reconcileMinecraftAccountAuctionSnapshots(db, accounts = [], activeAuct
       INSERT INTO minecraft_account_auction_snapshots (
         auction_uuid,
         minecraft_account_id,
+        item_name,
         price,
         end_ms,
         last_seen_at,
         state
       )
-      VALUES (?, ?, ?, ?, ?, 'active')
+      VALUES (?, ?, ?, ?, ?, ?, 'active')
       ON CONFLICT(auction_uuid) DO UPDATE SET
         minecraft_account_id = excluded.minecraft_account_id,
-        price = excluded.price,
+        item_name = COALESCE(excluded.item_name, minecraft_account_auction_snapshots.item_name),
+        price = CASE
+          WHEN minecraft_account_auction_snapshots.state = 'sold' THEN minecraft_account_auction_snapshots.price
+          ELSE excluded.price
+        END,
         end_ms = excluded.end_ms,
         last_seen_at = excluded.last_seen_at,
-        state = 'active'
-    `).run(snapshotId, accountId, auctionPrice(auction), endMs, timestamp);
+        state = CASE
+          WHEN minecraft_account_auction_snapshots.state = 'sold' THEN minecraft_account_auction_snapshots.state
+          ELSE 'active'
+        END
+    `).run(snapshotId, accountId, auctionItemName(auction), auctionPrice(auction), endMs, timestamp);
   }
 
   const placeholders = accountIds.map(() => '?').join(', ');
@@ -1019,11 +1045,124 @@ function reconcileMinecraftAccountAuctionSnapshots(db, accounts = [], activeAuct
   return { tracked, sold, expired };
 }
 
+function syntheticAuctionCollectionId(accountId, itemName, price, buyerName = '') {
+  const hash = crypto.createHash('sha1')
+    .update(`${accountId}|${normalizedAuctionItemName(itemName)}|${safeNonNegativeInteger(price)}|${String(buyerName || '').trim().toLowerCase()}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `chat-collect-${hash}`;
+}
+
+function isCloseAuctionPayout(snapshotPrice, collectedPrice) {
+  const listed = safeNonNegativeInteger(snapshotPrice);
+  const collected = safeNonNegativeInteger(collectedPrice);
+  if (!listed || !collected) return false;
+  if (listed === collected) return true;
+  return collected <= listed && collected >= Math.floor(listed * 0.92);
+}
+
+function findMatchingActiveAuctionSnapshot(db, accountId, itemName, collectedPrice) {
+  const normalizedItem = normalizedAuctionItemName(itemName);
+  const activeSnapshots = db.prepare(`
+    SELECT *
+    FROM minecraft_account_auction_snapshots
+    WHERE minecraft_account_id = ?
+      AND state = 'active'
+    ORDER BY last_seen_at DESC
+  `).all(accountId);
+  return activeSnapshots.find((snapshot) => (
+    normalizedItem
+    && normalizedAuctionItemName(snapshot.item_name) === normalizedItem
+  )) || activeSnapshots.find((snapshot) => isCloseAuctionPayout(snapshot.price, collectedPrice)) || null;
+}
+
+function recordMinecraftAccountAuctionCollection(db, accountId, {
+  itemName,
+  price,
+  buyerName = '',
+  nowMs = Date.now(),
+} = {}) {
+  const cleanItemName = cleanAuctionItemName(itemName);
+  const cleanPrice = safeNonNegativeInteger(price);
+  if (!accountId || !cleanItemName || cleanPrice <= 0) {
+    return { credited: false, event: null };
+  }
+  const timestampMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const timestamp = new Date(timestampMs).toISOString();
+  ensureMinecraftAccountStatsRow(db, accountId);
+
+  const existing = findMatchingActiveAuctionSnapshot(db, accountId, cleanItemName, cleanPrice);
+  if (existing) {
+    db.prepare(`
+      UPDATE minecraft_account_auction_snapshots
+      SET state = 'sold',
+          item_name = ?,
+          price = ?,
+          last_seen_at = ?
+      WHERE auction_uuid = ?
+        AND state = 'active'
+    `).run(cleanItemName, cleanPrice, timestamp, existing.auction_uuid);
+    db.prepare(`
+      UPDATE minecraft_account_stats
+      SET sold_auction_credit = sold_auction_credit + ?,
+          updated_at = ?
+      WHERE minecraft_account_id = ?
+    `).run(cleanPrice, timestamp, accountId);
+    return {
+      credited: true,
+      event: db.prepare('SELECT * FROM minecraft_account_auction_snapshots WHERE auction_uuid = ?').get(existing.auction_uuid),
+    };
+  }
+
+  const duplicateCutoff = new Date(timestampMs - 10 * 60 * 1000).toISOString();
+  const duplicate = db.prepare(`
+    SELECT *
+    FROM minecraft_account_auction_snapshots
+    WHERE minecraft_account_id = ?
+      AND state = 'sold'
+      AND item_name = ?
+      AND price = ?
+      AND last_seen_at >= ?
+    ORDER BY last_seen_at DESC
+    LIMIT 1
+  `).get(accountId, cleanItemName, cleanPrice, duplicateCutoff);
+  if (duplicate) {
+    return { credited: false, event: duplicate };
+  }
+
+  const syntheticId = syntheticAuctionCollectionId(accountId, cleanItemName, cleanPrice, buyerName);
+  const inserted = db.prepare(`
+    INSERT OR IGNORE INTO minecraft_account_auction_snapshots (
+      auction_uuid,
+      minecraft_account_id,
+      item_name,
+      price,
+      end_ms,
+      last_seen_at,
+      state
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 'sold')
+  `).run(syntheticId, accountId, cleanItemName, cleanPrice, timestampMs, timestamp);
+  if (inserted.changes > 0) {
+    db.prepare(`
+      UPDATE minecraft_account_stats
+      SET sold_auction_credit = sold_auction_credit + ?,
+          updated_at = ?
+      WHERE minecraft_account_id = ?
+    `).run(cleanPrice, timestamp, accountId);
+  }
+  return {
+    credited: inserted.changes > 0,
+    event: db.prepare('SELECT * FROM minecraft_account_auction_snapshots WHERE auction_uuid = ?').get(syntheticId),
+  };
+}
+
 function listMinecraftAccountAuctionEvents(db, accountId, limit = 5) {
   const cleanLimit = Math.min(25, Math.max(1, safeNonNegativeInteger(limit, 5)));
   return db.prepare(`
     SELECT
       auction_uuid AS auctionUuid,
+      item_name AS itemName,
       state,
       price,
       end_ms AS endMs,
@@ -1034,6 +1173,15 @@ function listMinecraftAccountAuctionEvents(db, accountId, limit = 5) {
     ORDER BY last_seen_at DESC
     LIMIT ?
   `).all(accountId, cleanLimit);
+}
+
+function listMinecraftAccountResolvedAuctionUuids(db, accountId) {
+  return db.prepare(`
+    SELECT auction_uuid AS auctionUuid
+    FROM minecraft_account_auction_snapshots
+    WHERE minecraft_account_id = ?
+      AND state IN ('sold', 'expired')
+  `).all(accountId).map((row) => row.auctionUuid);
 }
 
 function normalizeProxyType(value) {
@@ -1436,7 +1584,9 @@ module.exports = {
   clearListedSummoningEyes,
   moveListedSummoningEyesToHeld,
   reconcileMinecraftAccountAuctionSnapshots,
+  recordMinecraftAccountAuctionCollection,
   listMinecraftAccountAuctionEvents,
+  listMinecraftAccountResolvedAuctionUuids,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,

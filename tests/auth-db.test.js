@@ -29,6 +29,7 @@ const {
   moveListedSummoningEyesToHeld,
   getMinecraftAccountStats,
   reconcileMinecraftAccountAuctionSnapshots,
+  recordMinecraftAccountAuctionCollection,
   listMinecraftAccountAuctionEvents,
 } = require('../auth-db');
 
@@ -319,6 +320,52 @@ test('minecraft account auction snapshots credit sold auctions only before expir
   assert.strictEqual(expiredEvents[0].auctionUuid, 'expired-auction');
   assert.strictEqual(expiredEvents[0].state, 'expired');
   assert.strictEqual(expiredEvents[0].price, 10_000_000);
+});
+
+test('auction collection chat credits sold amount and records item name once', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Collection account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000913',
+    minecraftUsername: 'CollectedAuctionOne',
+  });
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [
+    {
+      uuid: 'fd-chestplate-auction',
+      auctioneer: '00000000000000000000000000000913',
+      item_name: 'Fierce Final Destination Chestplate',
+      starting_bid: 24_999_000,
+      end: 2_000,
+    },
+  ], { nowMs: 1_000 });
+
+  const recorded = recordMinecraftAccountAuctionCollection(db, account.id, {
+    itemName: 'Fierce Final Destination Chestplate',
+    price: 24_749_010,
+    buyerName: '[VIP] Arskalini',
+    nowMs: 1_100,
+  });
+  assert.strictEqual(recorded.credited, true);
+  assert.strictEqual(getMinecraftAccountStats(db, account.id).sold_auction_credit, 24_749_010);
+
+  const duplicate = recordMinecraftAccountAuctionCollection(db, account.id, {
+    itemName: 'Fierce Final Destination Chestplate',
+    price: 24_749_010,
+    buyerName: '[VIP] Arskalini',
+    nowMs: 1_101,
+  });
+  assert.strictEqual(duplicate.credited, false);
+  assert.strictEqual(getMinecraftAccountStats(db, account.id).sold_auction_credit, 24_749_010);
+
+  const events = listMinecraftAccountAuctionEvents(db, account.id, 5);
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].auctionUuid, 'fd-chestplate-auction');
+  assert.strictEqual(events[0].state, 'sold');
+  assert.strictEqual(events[0].price, 24_749_010);
+  assert.strictEqual(events[0].itemName, 'Fierce Final Destination Chestplate');
 });
 
 test('revoked and invalid api keys cannot authenticate', () => {

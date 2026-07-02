@@ -7,6 +7,10 @@ function numberValue(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function cleanAuctionUuid(value) {
+  return String(value || '').trim();
+}
+
 function timestampMs(value) {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -54,16 +58,19 @@ function computeAccountWealthStats({
   account,
   stats = {},
   activeAuctions = [],
+  resolvedAuctionUuids = [],
   summoningEyeSellOrderPrice = 0,
   nowMs = Date.now(),
 }) {
   const uuid = normalizeUuid(account?.minecraft_uuid);
+  const resolvedAuctionUuidSet = new Set((resolvedAuctionUuids || []).map(cleanAuctionUuid).filter(Boolean));
   const purse = numberValue(stats.purse);
   const soldAuctionCredit = numberValue(stats.sold_auction_credit);
   const currentTotalCoins = purse + soldAuctionCredit;
   const estimatedPurse = currentTotalCoins;
   const ahListedValue = activeAuctions
     .filter((auction) => normalizeUuid(auction.auctioneer) === uuid)
+    .filter((auction) => !resolvedAuctionUuidSet.has(cleanAuctionUuid(auction.uuid || auction.auction_uuid || auction.id)))
     .filter((auction) => !auction.end || numberValue(auction.end) > nowMs)
     .reduce((sum, auction) => sum + numberValue(auction.starting_bid ?? auction.price), 0);
   const heldEyeValue = Math.floor(numberValue(stats.summoning_eyes_held) * numberValue(summoningEyeSellOrderPrice) * 0.9875);

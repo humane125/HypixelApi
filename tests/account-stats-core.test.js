@@ -56,6 +56,33 @@ test('expired auctions do not count as sold coins', () => {
   assert.strictEqual(result.expectedCoins, 0);
 });
 
+test('resolved auction ids are excluded from listed expected coins', () => {
+  const nowMs = Date.now();
+  const result = computeAccountWealthStats({
+    account: { minecraft_uuid: '00000000-0000-0000-0000-000000000901' },
+    stats: {
+      purse: 10_000_000,
+      sold_auction_credit: 24_749_010,
+    },
+    activeAuctions: [
+      {
+        uuid: 'collected-auction',
+        auctioneer: '00000000000000000000000000000901',
+        starting_bid: 24_999_000,
+        bin: true,
+        end: nowMs + 60_000,
+      },
+    ],
+    resolvedAuctionUuids: ['collected-auction'],
+    summoningEyeSellOrderPrice: 0,
+    nowMs,
+  });
+
+  assert.strictEqual(result.ahListedValue, 0);
+  assert.strictEqual(result.expectedCoins, 0);
+  assert.strictEqual(result.currentTotalCoins, 34_749_010);
+});
+
 test('macroing rates use session deltas only while macroing', () => {
   const result = computeAccountWealthStats({
     account: { minecraft_uuid: '00000000-0000-0000-0000-000000000901' },

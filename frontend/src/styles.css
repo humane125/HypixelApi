@@ -1832,6 +1832,27 @@ tbody tr:hover {
   font-size: 0.82rem;
 }
 
+.remote-auction-event-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.remote-auction-event-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-auction-event-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
 .remote-auction-event.sold {
   border-color: rgba(85, 208, 144, 0.24);
 }

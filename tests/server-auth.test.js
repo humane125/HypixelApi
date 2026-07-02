@@ -723,6 +723,85 @@ test('mod websocket ingests account wealth stat events', async () => {
   }
 });
 
+test('mod websocket auction collection chat credits sold armor listing', async () => {
+  const nowMs = Date.now();
+  const auctionIndex = {
+    ensureFresh: async () => ({ source: 'cache', status: { ready: true } }),
+    refresh: async () => ({ source: 'cache', status: { ready: true } }),
+    getStatus: () => ({ ready: true }),
+    getItems: () => [
+      {
+        uuid: 'fd-leggings-active-auction',
+        auctioneer: '00000000000000000000000000000067',
+        item_name: 'Fierce Final Destination Leggings',
+        starting_bid: 24_999_000,
+        bin: true,
+        end: nowMs + 60_000,
+      },
+    ],
+  };
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  setUserPassword(db, owner.id, 'owner-password');
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_auction_collect',
+  });
+  const server = createAppServer({
+    db,
+    auctionIndex,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        id: '00000000000000000000000000000067',
+        name: 'AuctionCollectPlayer',
+      }),
+    }),
+  });
+  const baseUrl = await listen(server);
+  const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+  try {
+    await waitForSocketOpen(socket);
+    socket.send(JSON.stringify({
+      type: 'auth',
+      apiKey: 'hpx_test_mod_auction_collect',
+      username: 'AuctionCollectPlayer',
+    }));
+    await waitForSocketMessage(socket);
+
+    const listedBefore = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: await loginDashboard(baseUrl) },
+    });
+    const beforeAccount = (await listedBefore.json()).accounts.find((row) => row.minecraft_username === 'AuctionCollectPlayer');
+    assert.strictEqual(beforeAccount.wealthStats.ahListedValue, 24_999_000);
+
+    socket.send(JSON.stringify({
+      type: 'client_log',
+      level: 'info',
+      source: 'chat',
+      message: '§eYou collected §624,749,010 coins §efrom selling §6Fierce Final Destination Leggings §eto §a[VIP] Arskalini §ein an auction!',
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const listedAfter = await fetch(`${baseUrl}/api/dashboard/accounts`, {
+      headers: { Cookie: await loginDashboard(baseUrl) },
+    });
+    const afterAccount = (await listedAfter.json()).accounts.find((row) => row.minecraft_username === 'AuctionCollectPlayer');
+    assert.strictEqual(afterAccount.wealthStats.soldAuctionCredit, 24_749_010);
+    assert.strictEqual(afterAccount.wealthStats.currentTotalCoins, 24_749_010);
+    assert.strictEqual(afterAccount.wealthStats.ahListedValue, 0);
+    assert.strictEqual(afterAccount.wealthStats.expectedCoins, 0);
+    assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].itemName, 'Fierce Final Destination Leggings');
+    assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].state, 'sold');
+    assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].price, 24_749_010);
+  } finally {
+    closeSocketSilently(socket);
+    await close(server);
+  }
+});
+
 test('mod websocket marks account offline when the socket closes without an offline message', async () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });

@@ -39,7 +39,9 @@ const {
   clearListedSummoningEyes,
   moveListedSummoningEyesToHeld,
   reconcileMinecraftAccountAuctionSnapshots,
+  recordMinecraftAccountAuctionCollection,
   listMinecraftAccountAuctionEvents,
+  listMinecraftAccountResolvedAuctionUuids,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
@@ -683,7 +685,7 @@ function createDashboardAccountBroadcaster({ db, heartbeatWindowMs, enrichAccoun
   return { attach, broadcast, setLiveAccountStatusProvider };
 }
 
-function createLiveControlStore() {
+function createLiveControlStore({ onChatLog = null } = {}) {
   const dashboardClients = new Set();
   const accountStates = new Map();
   const MAX_LOGS = 100;
@@ -845,6 +847,9 @@ function createLiveControlStore() {
     state.logs = state.logs.slice(0, MAX_LOGS);
     state.updatedAt = new Date().toISOString();
     state.clearedAt = null;
+    if (source === 'chat' && typeof onChatLog === 'function') {
+      onChatLog(account, logEntry);
+    }
     broadcastLog(account.id, logEntry, state.updatedAt);
   }
 
@@ -1597,6 +1602,17 @@ function cleanAccountStatsMessage(message = {}) {
   };
 }
 
+function parseAuctionCollectionChatMessage(message) {
+  const cleanMessage = String(message || '').replace(/(?:\u00a7|&)[0-9a-fk-or]/gi, '').replace(/\s+/g, ' ').trim();
+  const match = cleanMessage.match(/^You collected ([\d,]+) coins from selling (.+?) to (.+?) in an auction!?$/i);
+  if (!match) return null;
+  const price = safeStatInteger(match[1].replace(/,/g, ''), 0);
+  const itemName = String(match[2] || '').trim();
+  const buyerName = String(match[3] || '').trim();
+  if (!price || !itemName) return null;
+  return { price, itemName, buyerName };
+}
+
 function applySummoningEyeEvent(db, accountId, message = {}) {
   const action = String(message.action || '').trim().toLowerCase();
   const quantity = safeStatInteger(message.quantity, 1);
@@ -1631,7 +1647,16 @@ function attachModWebSocketServer(server, {
   const modSocketServer = enabled ? new WebSocketServer({ noServer: true }) : null;
   const dashboardSocketServer = dashboardAccounts ? new WebSocketServer({ noServer: true }) : null;
   const modConnections = createModConnectionRegistry();
-  const liveControls = createLiveControlStore();
+  const liveControls = createLiveControlStore({
+    onChatLog: (account, logEntry) => {
+      const collection = parseAuctionCollectionChatMessage(logEntry.message);
+      if (!collection) return;
+      const result = recordMinecraftAccountAuctionCollection(db, account.id, collection);
+      if (result.credited) {
+        dashboardAccounts?.broadcast();
+      }
+    },
+  });
   dashboardAccounts?.setLiveAccountStatusProvider(() => modConnections.liveAccountStatuses());
   server.on('upgrade', (req, socket, head) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -1908,6 +1933,7 @@ function createAppServer(options = {}) {
         account,
         stats: getMinecraftAccountStats(db, account.id),
         activeAuctions,
+        resolvedAuctionUuids: listMinecraftAccountResolvedAuctionUuids(db, account.id),
         summoningEyeSellOrderPrice,
       });
       return {
@@ -1947,6 +1973,7 @@ function createAppServer(options = {}) {
       account,
       stats: getMinecraftAccountStats(db, account.id),
       activeAuctions: typeof auctionIndex.getItems === 'function' ? auctionIndex.getItems() : [],
+      resolvedAuctionUuids: listMinecraftAccountResolvedAuctionUuids(db, account.id),
       summoningEyeSellOrderPrice: bazaarPriceService.getCachedSummoningEyeSellOrderPrice?.() || 0,
     });
     return {
