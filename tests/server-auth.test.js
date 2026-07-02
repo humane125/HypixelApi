@@ -1684,6 +1684,49 @@ test('dashboard account lists include computed wealth stats', async () => {
   }
 });
 
+test('dashboard managers can correct held summoning eye count', async () => {
+  const { db, owner, server } = createTestServerWithOptions({
+    bazaarPriceService: {
+      getCachedSummoningEyeSellOrderPrice: () => 1_500_000,
+    },
+  });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Old Mod Account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000911',
+    minecraftUsername: 'OldModEyes',
+  });
+  upsertMinecraftAccountStats(db, account.id, {
+    purse: 5_000_000,
+    summoningEyesHeld: 0,
+  });
+
+  const baseUrl = await listen(server);
+  try {
+    const cookie = await loginDashboard(baseUrl);
+    const corrected = await fetch(`${baseUrl}/api/dashboard/accounts/summoning-eyes`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        accountId: account.id,
+        summoningEyesHeld: 3,
+      }),
+    });
+    assert.strictEqual(corrected.status, 200);
+    const correctedBody = await corrected.json();
+    assert.strictEqual(correctedBody.wealthStats.summoningEyesHeld, 3);
+    assert.strictEqual(correctedBody.wealthStats.heldEyeValue, 4_443_750);
+
+    const stats = getMinecraftAccountStats(db, account.id);
+    assert.strictEqual(stats.summoning_eyes_held, 3);
+  } finally {
+    await close(server);
+  }
+});
+
 test('dashboard account list refreshes auction index before computing ah listed value', async () => {
   const nowMs = Date.now();
   let ensureFreshCalls = 0;

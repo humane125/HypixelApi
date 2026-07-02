@@ -1407,6 +1407,7 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
   const [issuedKey, setIssuedKey] = useState(null);
   const [roleDrafts, setRoleDrafts] = useState({});
   const [proxyDrafts, setProxyDrafts] = useState({});
+  const [summoningEyeDrafts, setSummoningEyeDrafts] = useState({});
   const [activeProxyAccountId, setActiveProxyAccountId] = useState(null);
   const [liveControlByAccountId, setLiveControlByAccountId] = useState({});
   const [nowMs, setNowMs] = useState(Date.now());
@@ -1813,6 +1814,41 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       setStatusMessage(err.message);
     }
   }, [loadDashboard, proxyDrafts]);
+
+  const updateSummoningEyeDraft = useCallback((accountId, value) => {
+    setSummoningEyeDrafts((current) => ({
+      ...current,
+      [accountId]: value,
+    }));
+  }, []);
+
+  const saveSummoningEyeCorrection = useCallback(async (event, account) => {
+    event.preventDefault();
+    const rawValue = summoningEyeDrafts[account.id] ?? account.wealthStats?.summoningEyesHeld ?? 0;
+    const summoningEyesHeld = Number(rawValue);
+    if (!Number.isSafeInteger(summoningEyesHeld) || summoningEyesHeld < 0) {
+      setStatusMessage('Held eyes must be a non-negative whole number');
+      return;
+    }
+    try {
+      await apiFetch('/api/dashboard/accounts/summoning-eyes', null, {
+        method: 'POST',
+        body: JSON.stringify({
+          accountId: account.id,
+          summoningEyesHeld,
+        }),
+      });
+      setSummoningEyeDrafts((current) => {
+        const next = { ...current };
+        delete next[account.id];
+        return next;
+      });
+      setStatusMessage(`Held eyes corrected for ${account.minecraft_username}`);
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard, summoningEyeDrafts]);
 
   const deleteDashboardUser = useCallback(async (user) => {
     const confirmed = window.confirm(`Delete dashboard user "${user.username}"?`);
@@ -2415,6 +2451,26 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
 
                   {canManageUsers || canManageAccounts ? (
                     <div className="account-controls">
+                      {canManageAccounts ? (
+                        <form className="eye-correction-form" onSubmit={(event) => saveSummoningEyeCorrection(event, account)}>
+                          <label htmlFor={`held-eyes-${account.id}`}>
+                            <img className="eye-correction-icon" src={summoningEyeIcon} alt="" aria-hidden="true" />
+                            Held Eyes
+                          </label>
+                          <input
+                            id={`held-eyes-${account.id}`}
+                            type="number"
+                            inputMode="numeric"
+                            min="0"
+                            step="1"
+                            placeholder={String(account.wealthStats?.summoningEyesHeld ?? 0)}
+                            value={summoningEyeDrafts[account.id] ?? ''}
+                            onChange={(event) => updateSummoningEyeDraft(account.id, event.target.value)}
+                            aria-label={`Correct held summoning eyes for ${account.minecraft_username}`}
+                          />
+                          <button className="btn secondary compact" type="submit">Set</button>
+                        </form>
+                      ) : null}
                       <div className="account-action-row">
                         {canManageUsers ? (
                           <button className="btn primary compact account-connect" type="button" onClick={() => connectAccount(account)}><Activity size={15} aria-hidden="true" />Connect</button>

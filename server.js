@@ -2338,6 +2338,49 @@ function createAppServer(options = {}) {
       return;
     }
 
+    if (pathname === '/api/dashboard/accounts/summoning-eyes' && req.method === 'POST') {
+      try {
+        const body = await parseRequestBody(req);
+        const access = requireDashboardAccountManager(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const accountId = Number(body.accountId);
+        const summoningEyesHeld = Number(body.summoningEyesHeld);
+        if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+          writeJson(res, 400, { error: 'Valid accountId is required' });
+          return;
+        }
+        if (!Number.isSafeInteger(summoningEyesHeld) || summoningEyesHeld < 0) {
+          writeJson(res, 400, { error: 'summoningEyesHeld must be a non-negative integer' });
+          return;
+        }
+        const accountExists = listMinecraftAccounts(db, { heartbeatWindowMs: accountHeartbeatWindowMs })
+          .some((account) => Number(account.id) === accountId);
+        if (!accountExists) {
+          writeJson(res, 404, { error: 'Minecraft account not found' });
+          return;
+        }
+        upsertMinecraftAccountStats(db, accountId, { summoningEyesHeld });
+        await refreshAuctionIndexForDashboardAccounts();
+        const account = listDashboardMinecraftAccounts().find((row) => Number(row.id) === accountId);
+        auditRequest(db, access.auth, req, 'minecraft_account.summoning_eyes', {
+          accountId,
+          summoningEyesHeld,
+        });
+        dashboardAccounts?.broadcast();
+        writeJson(res, 200, {
+          ok: true,
+          account,
+          wealthStats: account?.wealthStats || null,
+        });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
     if (pathname === '/api/dashboard/accounts/proxy' && req.method === 'POST') {
       try {
         const body = await parseRequestBody(req);

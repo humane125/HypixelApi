@@ -1047,6 +1047,48 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.eye-correction-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 56px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid rgba(98, 119, 145, 0.18);
+  border-radius: 7px;
+  background: rgba(12, 16, 22, 0.72);
+}
+
+.eye-correction-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #aebbd0;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.eye-correction-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.eye-correction-form input {
+  min-height: 34px;
+  padding: 7px 8px;
+  text-align: right;
+}
+
+.eye-correction-form .btn {
+  min-height: 34px;
+  padding: 7px 9px;
+}
+
 .proxy-toggle {
   display: inline-flex;
   align-items: center;
