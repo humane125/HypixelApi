@@ -66,7 +66,8 @@ function computeAccountWealthStats({
   const resolvedAuctionUuidSet = new Set((resolvedAuctionUuids || []).map(cleanAuctionUuid).filter(Boolean));
   const purse = numberValue(stats.purse);
   const soldAuctionCredit = numberValue(stats.sold_auction_credit);
-  const currentTotalCoins = purse + soldAuctionCredit;
+  const collectedAuctionCredit = numberValue(stats.collected_auction_credit);
+  const currentTotalCoins = purse + collectedAuctionCredit;
   const estimatedPurse = currentTotalCoins;
   const ahListedValue = activeAuctions
     .filter((auction) => normalizeUuid(auction.auctioneer) === uuid)
@@ -88,12 +89,13 @@ function computeAccountWealthStats({
   return {
     purse,
     soldAuctionCredit,
+    collectedAuctionCredit,
     currentTotalCoins,
     estimatedPurse,
     ahListedValue,
     heldEyeValue,
     listedEyeValue,
-    expectedCoins: ahListedValue + heldEyeValue + listedEyeValue,
+    expectedCoins: ahListedValue + soldAuctionCredit + heldEyeValue + listedEyeValue,
     summoningEyesHeld: numberValue(stats.summoning_eyes_held),
     summoningEyesListed: numberValue(stats.summoning_eyes_listed),
     summoningEyeListPrice: numberValue(stats.summoning_eye_list_price),

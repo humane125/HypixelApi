@@ -1024,8 +1024,10 @@ function auctionEventIcon(event) {
 function auctionEventTitle(event) {
   const itemName = String(event?.itemName || '').trim();
   if (itemName) {
+    if (event.state === 'collected') return `${itemName} collected`;
     return event.state === 'sold' ? `${itemName} sold` : `${itemName} expired`;
   }
+  if (event.state === 'collected') return 'Auction collected';
   return event.state === 'sold' ? 'Auction sold' : 'Auction expired';
 }
 
@@ -1036,6 +1038,7 @@ function RemoteWealthPanel({ stats }) {
   const moneyRows = [
     ['Reported purse', stats?.purse],
     ['Sold auction credit', stats?.soldAuctionCredit],
+    ['Collected auction credit', stats?.collectedAuctionCredit],
     ['Auction listings', stats?.ahListedValue],
     ['Held eye value', stats?.heldEyeValue],
     ['Listed eye value', stats?.listedEyeValue],
@@ -1150,7 +1153,7 @@ function RemoteWealthPanel({ stats }) {
                 <img className="remote-auction-event-icon" src={auctionEventIcon(event)} alt="" aria-hidden="true" />
                 <span>{auctionEventTitle(event)}</span>
               </span>
-              <strong>{event.state === 'sold' ? `+${formatCoins(event.price)}` : `Removed ${formatCoins(event.price)}`}</strong>
+              <strong>{event.state === 'sold' || event.state === 'collected' ? `+${formatCoins(event.price)}` : `Removed ${formatCoins(event.price)}`}</strong>
             </div>
           ))}
         </div>

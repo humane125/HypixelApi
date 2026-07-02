@@ -123,6 +123,7 @@ function migrateDatabase(db) {
       summoning_eye_list_price INTEGER NOT NULL DEFAULT 0,
       summoning_eye_drops_total INTEGER NOT NULL DEFAULT 0,
       sold_auction_credit INTEGER NOT NULL DEFAULT 0,
+      collected_auction_credit INTEGER NOT NULL DEFAULT 0,
       macroing INTEGER NOT NULL DEFAULT 0,
       macro_started_at TEXT,
       macro_last_sample_at TEXT,
@@ -239,6 +240,7 @@ function migrateDatabase(db) {
     macro_last_fd_minimum: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_last_fd_minimum INTEGER',
     macro_base_eye_drops: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_base_eye_drops INTEGER NOT NULL DEFAULT 0',
     macro_last_eye_drops: 'ALTER TABLE minecraft_account_stats ADD COLUMN macro_last_eye_drops INTEGER NOT NULL DEFAULT 0',
+    collected_auction_credit: 'ALTER TABLE minecraft_account_stats ADD COLUMN collected_auction_credit INTEGER NOT NULL DEFAULT 0',
   };
   for (const [column, sql] of Object.entries(statColumnAdds)) {
     if (!statColumns.includes(column)) {
@@ -694,6 +696,7 @@ function defaultMinecraftAccountStats(accountId) {
     summoning_eye_list_price: 0,
     summoning_eye_drops_total: 0,
     sold_auction_credit: 0,
+    collected_auction_credit: 0,
     macroing: 0,
     macro_started_at: null,
     macro_last_sample_at: null,
@@ -997,13 +1000,13 @@ function reconcileMinecraftAccountAuctionSnapshots(db, accounts = [], activeAuct
         minecraft_account_id = excluded.minecraft_account_id,
         item_name = COALESCE(excluded.item_name, minecraft_account_auction_snapshots.item_name),
         price = CASE
-          WHEN minecraft_account_auction_snapshots.state = 'sold' THEN minecraft_account_auction_snapshots.price
+          WHEN minecraft_account_auction_snapshots.state IN ('sold', 'collected') THEN minecraft_account_auction_snapshots.price
           ELSE excluded.price
         END,
         end_ms = excluded.end_ms,
         last_seen_at = excluded.last_seen_at,
         state = CASE
-          WHEN minecraft_account_auction_snapshots.state = 'sold' THEN minecraft_account_auction_snapshots.state
+          WHEN minecraft_account_auction_snapshots.state IN ('sold', 'collected') THEN minecraft_account_auction_snapshots.state
           ELSE 'active'
         END
     `).run(snapshotId, accountId, auctionItemName(auction), auctionPrice(auction), endMs, timestamp);
@@ -1067,7 +1070,7 @@ function findMatchingActiveAuctionSnapshot(db, accountId, itemName, collectedPri
     SELECT *
     FROM minecraft_account_auction_snapshots
     WHERE minecraft_account_id = ?
-      AND state = 'active'
+      AND state IN ('active', 'sold')
     ORDER BY last_seen_at DESC
   `).all(accountId);
   return activeSnapshots.find((snapshot) => (
@@ -1095,19 +1098,24 @@ function recordMinecraftAccountAuctionCollection(db, accountId, {
   if (existing) {
     db.prepare(`
       UPDATE minecraft_account_auction_snapshots
-      SET state = 'sold',
+      SET state = 'collected',
           item_name = ?,
           price = ?,
           last_seen_at = ?
       WHERE auction_uuid = ?
-        AND state = 'active'
+        AND state IN ('active', 'sold')
     `).run(cleanItemName, cleanPrice, timestamp, existing.auction_uuid);
+    const pendingReduction = existing.state === 'sold' ? safeNonNegativeInteger(existing.price) : 0;
     db.prepare(`
       UPDATE minecraft_account_stats
-      SET sold_auction_credit = sold_auction_credit + ?,
+      SET sold_auction_credit = CASE
+            WHEN sold_auction_credit > ? THEN sold_auction_credit - ?
+            ELSE 0
+          END,
+          collected_auction_credit = collected_auction_credit + ?,
           updated_at = ?
       WHERE minecraft_account_id = ?
-    `).run(cleanPrice, timestamp, accountId);
+    `).run(pendingReduction, pendingReduction, cleanPrice, timestamp, accountId);
     return {
       credited: true,
       event: db.prepare('SELECT * FROM minecraft_account_auction_snapshots WHERE auction_uuid = ?').get(existing.auction_uuid),
@@ -1119,7 +1127,7 @@ function recordMinecraftAccountAuctionCollection(db, accountId, {
     SELECT *
     FROM minecraft_account_auction_snapshots
     WHERE minecraft_account_id = ?
-      AND state = 'sold'
+      AND state = 'collected'
       AND item_name = ?
       AND price = ?
       AND last_seen_at >= ?
@@ -1141,12 +1149,12 @@ function recordMinecraftAccountAuctionCollection(db, accountId, {
       last_seen_at,
       state
     )
-    VALUES (?, ?, ?, ?, ?, ?, 'sold')
+    VALUES (?, ?, ?, ?, ?, ?, 'collected')
   `).run(syntheticId, accountId, cleanItemName, cleanPrice, timestampMs, timestamp);
   if (inserted.changes > 0) {
     db.prepare(`
       UPDATE minecraft_account_stats
-      SET sold_auction_credit = sold_auction_credit + ?,
+      SET collected_auction_credit = collected_auction_credit + ?,
           updated_at = ?
       WHERE minecraft_account_id = ?
     `).run(cleanPrice, timestamp, accountId);
@@ -1169,7 +1177,7 @@ function listMinecraftAccountAuctionEvents(db, accountId, limit = 5) {
       last_seen_at AS updatedAt
     FROM minecraft_account_auction_snapshots
     WHERE minecraft_account_id = ?
-      AND state IN ('sold', 'expired')
+      AND state IN ('sold', 'collected', 'expired')
     ORDER BY last_seen_at DESC
     LIMIT ?
   `).all(accountId, cleanLimit);
@@ -1180,7 +1188,7 @@ function listMinecraftAccountResolvedAuctionUuids(db, accountId) {
     SELECT auction_uuid AS auctionUuid
     FROM minecraft_account_auction_snapshots
     WHERE minecraft_account_id = ?
-      AND state IN ('sold', 'expired')
+      AND state IN ('sold', 'collected', 'expired')
   `).all(accountId).map((row) => row.auctionUuid);
 }
 

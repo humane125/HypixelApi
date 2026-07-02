@@ -789,12 +789,13 @@ test('mod websocket auction collection chat credits sold armor listing', async (
       headers: { Cookie: await loginDashboard(baseUrl) },
     });
     const afterAccount = (await listedAfter.json()).accounts.find((row) => row.minecraft_username === 'AuctionCollectPlayer');
-    assert.strictEqual(afterAccount.wealthStats.soldAuctionCredit, 24_749_010);
+    assert.strictEqual(afterAccount.wealthStats.soldAuctionCredit, 0);
+    assert.strictEqual(afterAccount.wealthStats.collectedAuctionCredit, 24_749_010);
     assert.strictEqual(afterAccount.wealthStats.currentTotalCoins, 24_749_010);
     assert.strictEqual(afterAccount.wealthStats.ahListedValue, 0);
     assert.strictEqual(afterAccount.wealthStats.expectedCoins, 0);
     assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].itemName, 'Fierce Final Destination Leggings');
-    assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].state, 'sold');
+    assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].state, 'collected');
     assert.strictEqual(afterAccount.wealthStats.auctionEvents[0].price, 24_749_010);
   } finally {
     closeSocketSilently(socket);
@@ -1758,6 +1759,12 @@ test('dashboard account lists include computed wealth stats', async () => {
     const refreshedAccount = (await refreshed.json()).accounts.find((row) => row.minecraft_username === 'EndMacroOne');
     assert.strictEqual(refreshedAccount.wealthStats.auctionEvents[0].state, 'sold');
     assert.strictEqual(refreshedAccount.wealthStats.auctionEvents[0].price, 24_999_000);
+    assert.strictEqual(refreshedAccount.wealthStats.soldAuctionCredit, 24_999_000);
+    assert.strictEqual(refreshedAccount.wealthStats.currentTotalCoins, 10_000_000);
+    assert.strictEqual(
+      refreshedAccount.wealthStats.expectedCoins,
+      refreshedAccount.wealthStats.soldAuctionCredit + refreshedAccount.wealthStats.heldEyeValue
+    );
   } finally {
     await close(server);
   }

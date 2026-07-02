@@ -1857,6 +1857,10 @@ tbody tr:hover {
   border-color: rgba(85, 208, 144, 0.24);
 }
 
+.remote-auction-event.collected {
+  border-color: rgba(88, 166, 255, 0.28);
+}
+
 .remote-auction-event.expired {
   border-color: rgba(215, 154, 74, 0.28);
 }
