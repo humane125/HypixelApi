@@ -1910,6 +1910,61 @@ test('dashboard account list refreshes auction index before computing ah listed 
   }
 });
 
+test('server background auction scan reconciles listings without dashboard load', async () => {
+  const nowMs = Date.now();
+  let ensureFreshCalls = 0;
+  let auctionItems = [{
+    uuid: 'background-dashboard-auction',
+    auctioneer: '00000000000000000000000000000942',
+    item_name: 'Fierce Final Destination Boots',
+    starting_bid: 24_999_000,
+    bin: true,
+    end: nowMs + 60_000,
+  }];
+  const auctionIndex = {
+    ensureFresh: async () => {
+      ensureFreshCalls += 1;
+      if (ensureFreshCalls >= 2) {
+        auctionItems = [];
+      }
+      return { source: 'background', status: { ready: true } };
+    },
+    refresh: async () => ({ source: 'cache', status: { ready: true } }),
+    getStatus: () => ({ ready: true }),
+    getItems: () => auctionItems,
+  };
+  const { db, owner, server } = createTestServerWithOptions({
+    auctionIndex,
+    auctionWealthScanIntervalMs: 10,
+  });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Background AH',
+    minecraftUuid: '00000000-0000-0000-0000-000000000942',
+    minecraftUsername: 'BackgroundAuctionAccount',
+  });
+  await listen(server);
+  try {
+    await new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        const stats = getMinecraftAccountStats(db, account.id);
+        if (stats.sold_auction_credit === 24_999_000) {
+          clearInterval(timer);
+          resolve();
+          return;
+        }
+        if (Date.now() - startedAt > 1000) {
+          clearInterval(timer);
+          reject(new Error('Timed out waiting for background auction scan'));
+        }
+      }, 20);
+    });
+  } finally {
+    await close(server);
+  }
+});
+
 test('dashboard can save account proxy settings without exposing proxy passwords in account lists', async () => {
   const { server } = createTestServer();
   const baseUrl = await listen(server);

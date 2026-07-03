@@ -66,6 +66,7 @@ const DEFAULT_LOGIN_RATE_LIMIT = {
   lockMs: 15 * 60 * 1000,
 };
 const DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS = 60_000;
+const DEFAULT_AUCTION_WEALTH_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const WEBSOCKET_CLOSING = 2;
 const WEBSOCKET_CLOSED = 3;
 
@@ -2004,6 +2005,44 @@ function createAppServer(options = {}) {
       enrichAccounts: enrichAccountsWithWealthStats,
     })
     : null;
+
+  const configuredAuctionWealthScanIntervalMs = Number(process.env.AUCTION_WEALTH_SCAN_INTERVAL_MS);
+  const auctionWealthScanIntervalMs = options.auctionWealthScanIntervalMs === false
+    ? 0
+    : Number.isFinite(Number(options.auctionWealthScanIntervalMs))
+      ? Math.max(0, Number(options.auctionWealthScanIntervalMs))
+      : Number.isFinite(configuredAuctionWealthScanIntervalMs) && configuredAuctionWealthScanIntervalMs > 0
+        ? configuredAuctionWealthScanIntervalMs
+        : DEFAULT_AUCTION_WEALTH_SCAN_INTERVAL_MS;
+  let auctionWealthScanRunning = false;
+
+  async function runBackgroundAuctionWealthScan() {
+    if (!db || auctionWealthScanRunning || typeof auctionIndex.ensureFresh !== 'function') return;
+    auctionWealthScanRunning = true;
+    try {
+      await auctionIndex.ensureFresh();
+      const status = typeof auctionIndex.getStatus === 'function' ? auctionIndex.getStatus() : null;
+      if (status && status.ready === false) return;
+      const accounts = listMinecraftAccounts(db, { heartbeatWindowMs: accountHeartbeatWindowMs });
+      const activeAuctions = typeof auctionIndex.getItems === 'function' ? auctionIndex.getItems() : [];
+      const result = reconcileMinecraftAccountAuctionSnapshots(db, accounts, activeAuctions);
+      if (dashboardAccounts && (result.tracked || result.sold || result.expired)) {
+        dashboardAccounts.broadcast();
+      }
+    } catch (err) {
+      console.warn('Background auction wealth scan failed:', err.message);
+    } finally {
+      auctionWealthScanRunning = false;
+    }
+  }
+
+  const auctionWealthScanTimer = db && auctionWealthScanIntervalMs > 0
+    ? setInterval(runBackgroundAuctionWealthScan, auctionWealthScanIntervalMs)
+    : null;
+  if (auctionWealthScanTimer?.unref) {
+    auctionWealthScanTimer.unref();
+  }
+
   const server = http.createServer(async (req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = parsedUrl.pathname;
@@ -2772,6 +2811,11 @@ function createAppServer(options = {}) {
     getLiveAccountStatuses = () => socketServers.modConnections.liveAccountStatuses();
     dashboardAccounts?.setLiveAccountStatusProvider(getLiveAccountStatuses);
   }
+  server.on('close', () => {
+    if (auctionWealthScanTimer) {
+      clearInterval(auctionWealthScanTimer);
+    }
+  });
   return server;
 }
 
