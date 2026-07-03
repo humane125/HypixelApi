@@ -1243,6 +1243,19 @@ test('dashboard websocket can request live screenshots and receive mod logs', as
     assert.strictEqual(actionAck.actionType, 'client_command');
     assert.strictEqual(actionAck.requestId, action.requestId);
 
+    const macroActionPromise = waitForSocketMessageMatching(modSocket, (message) => (
+      message.type === 'remote_action'
+      && message.accountId === authed.account.id
+      && message.actionType === 'macro_start'
+    ));
+    dashboardSocket.send(JSON.stringify({
+      type: 'send_action',
+      accountId: authed.account.id,
+      actionType: 'macro_start',
+    }));
+    const macroAction = await macroActionPromise;
+    assert.strictEqual(macroAction.content, '');
+
     const normalLogPromise = waitForSocketMessageMatching(dashboardSocket, (message) => (
       message.type === 'live_control_log'
       && message.accountId === authed.account.id

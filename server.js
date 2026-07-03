@@ -792,7 +792,7 @@ function createLiveControlStore({ onChatLog = null } = {}) {
       return;
     }
     const content = cleanRemoteActionContent(message.content, actionType);
-    if (!content) {
+    if (remoteActionRequiresContent(actionType) && !content) {
       sendSocketJson(socket, { type: 'live_control_error', code: 'invalid_action_content', accountId, message: 'Message or command is required' });
       return;
     }
@@ -974,7 +974,20 @@ function createLiveControlStore({ onChatLog = null } = {}) {
 
   function cleanRemoteActionType(actionType) {
     const value = String(actionType || '').trim().toLowerCase();
-    return ['client_command', 'server_command', 'text_message'].includes(value) ? value : '';
+    return [
+      'client_command',
+      'server_command',
+      'text_message',
+      'macro_start',
+      'macro_stop',
+      'disconnect_server',
+      'reconnect_hypixel',
+      'close_instance',
+    ].includes(value) ? value : '';
+  }
+
+  function remoteActionRequiresContent(actionType) {
+    return ['client_command', 'server_command', 'text_message'].includes(actionType);
   }
 
   function cleanRemoteActionContent(content, actionType) {

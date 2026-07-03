@@ -17,7 +17,9 @@ import {
   Loader2,
   LogOut,
   Monitor,
+  Play,
   Plus,
+  Power,
   RefreshCw,
   RotateCw,
   Search,
@@ -25,6 +27,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  Square,
   Trash2,
   UserPlus,
   Users,
@@ -1179,6 +1182,10 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendA
   const screenshotDataUrl = screenshot?.imageBase64
     ? `data:${screenshot.imageMime || 'image/jpeg'};base64,${screenshot.imageBase64}`
     : null;
+  const isMacroing = displayStatus === 'macroing' || Boolean(account.wealthStats?.macroing);
+  const isOnHypixel = displayStatus === 'hypixel' || displayStatus === 'macroing';
+  const canReconnect = isOnline && !isOnHypixel;
+  const isQuickActionDisabled = !isOnline || isActionSending;
   const actionPrefix = actionType === 'text_message' ? '' : '/';
   const actionPlaceholder = actionType === 'client_command'
     ? 'autoauction'
@@ -1195,6 +1202,14 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendA
     if (sent) {
       setActionDraft('');
     }
+    setIsActionSending(false);
+  };
+
+  const sendQuickAction = async (nextActionType, options = {}) => {
+    if (!isOnline || isActionSending) return;
+    if (options.confirmMessage && !window.confirm(options.confirmMessage)) return;
+    setIsActionSending(true);
+    await onSendAction(account.id, nextActionType, '');
     setIsActionSending(false);
   };
 
@@ -1320,6 +1335,53 @@ function RemoteControlPage({ account, state, nowMs, onRequestScreenshot, onSendA
               <h3>Send Action</h3>
               <p className="muted">Choose an action type and send it to this connected instance.</p>
             </div>
+          </div>
+          <div className="remote-quick-actions" aria-label="Instance controls">
+            {isMacroing ? (
+              <button
+                className="btn danger compact"
+                type="button"
+                disabled={isQuickActionDisabled}
+                onClick={() => sendQuickAction('macro_stop')}
+              >
+                <Square size={15} aria-hidden="true" />Stop Macro
+              </button>
+            ) : (
+              <button
+                className="btn primary compact"
+                type="button"
+                disabled={isQuickActionDisabled || !isOnHypixel}
+                onClick={() => sendQuickAction('macro_start')}
+              >
+                <Play size={15} aria-hidden="true" />Start Macro
+              </button>
+            )}
+            <button
+              className="btn secondary compact"
+              type="button"
+              disabled={isQuickActionDisabled || !isOnHypixel}
+              onClick={() => sendQuickAction('disconnect_server')}
+            >
+              <LogOut size={15} aria-hidden="true" />Disconnect
+            </button>
+            <button
+              className="btn secondary compact"
+              type="button"
+              disabled={isQuickActionDisabled || !canReconnect}
+              onClick={() => sendQuickAction('reconnect_hypixel')}
+            >
+              <RotateCw size={15} aria-hidden="true" />Reconnect
+            </button>
+            <button
+              className="btn danger compact"
+              type="button"
+              disabled={isQuickActionDisabled}
+              onClick={() => sendQuickAction('close_instance', {
+                confirmMessage: `Close Minecraft instance for ${account.minecraft_username}?`,
+              })}
+            >
+              <Power size={15} aria-hidden="true" />Close Instance
+            </button>
           </div>
           <Field label="Action Type">
             <select disabled={!isOnline || isActionSending} value={actionType} onChange={(event) => setActionType(event.target.value)}>
