@@ -727,6 +727,14 @@ code {
   margin-bottom: 18px;
 }
 
+.section-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .pill,
 .badge {
   display: inline-flex;

@@ -1874,6 +1874,21 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     }
   }, [loadDashboard, summoningEyeDrafts]);
 
+  const resetAuctionCredits = useCallback(async () => {
+    const confirmed = window.confirm('Reset sold auction credit, collected credit, and stored auction events for every Minecraft account?');
+    if (!confirmed) return;
+    try {
+      const body = await apiFetch('/api/dashboard/accounts/auction-credits/reset', null, {
+        method: 'POST',
+      });
+      const result = body.result || {};
+      setStatusMessage(`Auction credits reset (${result.accountsReset || 0} accounts, ${result.auctionEventsDeleted || 0} events)`);
+      loadDashboard();
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, [loadDashboard]);
+
   const deleteDashboardUser = useCallback(async (user) => {
     const confirmed = window.confirm(`Delete dashboard user "${user.username}"?`);
     if (!confirmed) return;
@@ -2376,7 +2391,15 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       <section className="results-panel account-panel">
         <div className="section-heading">
           <h2>{selectedAccountFolder === 'banned' ? 'Banned Accounts' : 'Minecraft Accounts'}</h2>
-          <span className="pill">{visibleAccounts.length} shown</span>
+          <div className="section-heading-actions">
+            {canManageAccounts ? (
+              <button className="btn danger compact" type="button" onClick={resetAuctionCredits}>
+                <RotateCw size={15} aria-hidden="true" />
+                Reset Auction Credit
+              </button>
+            ) : null}
+            <span className="pill">{visibleAccounts.length} shown</span>
+          </div>
         </div>
         <div className="folder-tabs">
           {accountFolders.map((folder) => (

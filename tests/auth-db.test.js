@@ -30,6 +30,7 @@ const {
   getMinecraftAccountStats,
   reconcileMinecraftAccountAuctionSnapshots,
   recordMinecraftAccountAuctionCollection,
+  resetMinecraftAccountAuctionCredits,
   listMinecraftAccountAuctionEvents,
 } = require('../auth-db');
 
@@ -370,6 +371,39 @@ test('auction collection chat credits sold amount and records item name once', (
   assert.strictEqual(events[0].state, 'collected');
   assert.strictEqual(events[0].price, 24_749_010);
   assert.strictEqual(events[0].itemName, 'Fierce Final Destination Chestplate');
+});
+
+test('auction credit reset clears sold collected and stored auction events', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Reset account',
+    minecraftUuid: '00000000-0000-0000-0000-000000000914',
+    minecraftUsername: 'ResetAuctionOne',
+  });
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [
+    {
+      uuid: 'reset-auction',
+      auctioneer: '00000000000000000000000000000914',
+      item_name: 'Fierce Final Destination Boots',
+      starting_bid: 24_999_000,
+      end: 2_000,
+    },
+  ], { nowMs: 1_000 });
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [], { nowMs: 1_100 });
+  db.prepare('UPDATE minecraft_account_stats SET collected_auction_credit = ? WHERE minecraft_account_id = ?')
+    .run(123_456, account.id);
+
+  const result = resetMinecraftAccountAuctionCredits(db);
+  assert.strictEqual(result.accountsReset, 1);
+  assert.strictEqual(result.auctionEventsDeleted, 1);
+
+  const stats = getMinecraftAccountStats(db, account.id);
+  assert.strictEqual(stats.sold_auction_credit, 0);
+  assert.strictEqual(stats.collected_auction_credit, 0);
+  assert.deepStrictEqual(listMinecraftAccountAuctionEvents(db, account.id, 5), []);
 });
 
 test('revoked and invalid api keys cannot authenticate', () => {

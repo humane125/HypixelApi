@@ -1812,6 +1812,61 @@ test('dashboard managers can correct held summoning eye count', async () => {
   }
 });
 
+test('dashboard managers can reset all auction credits', async () => {
+  const nowMs = Date.now();
+  let auctionItems = [
+    {
+      uuid: 'reset-dashboard-auction',
+      auctioneer: '00000000000000000000000000000951',
+      item_name: 'Fierce Final Destination Helmet',
+      starting_bid: 24_999_000,
+      bin: true,
+      end: nowMs + 60_000,
+    },
+  ];
+  const auctionIndex = {
+    ensureFresh: async () => ({ source: 'cache', status: { ready: true } }),
+    refresh: async () => ({ source: 'cache', status: { ready: true } }),
+    getStatus: () => ({ ready: true }),
+    getItems: () => auctionItems,
+  };
+  const { db, owner, server } = createTestServerWithOptions({ auctionIndex });
+  createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Reset Dashboard',
+    minecraftUuid: '00000000-0000-0000-0000-000000000951',
+    minecraftUsername: 'ResetDashboardOne',
+  });
+
+  const baseUrl = await listen(server);
+  try {
+    const cookie = await loginDashboard(baseUrl);
+    const firstList = await fetch(`${baseUrl}/api/dashboard/accounts`, { headers: { Cookie: cookie } });
+    assert.strictEqual(firstList.status, 200);
+    auctionItems = [];
+    const soldList = await fetch(`${baseUrl}/api/dashboard/accounts`, { headers: { Cookie: cookie } });
+    const soldAccount = (await soldList.json()).accounts.find((row) => row.minecraft_username === 'ResetDashboardOne');
+    assert.strictEqual(soldAccount.wealthStats.soldAuctionCredit, 24_999_000);
+    assert.strictEqual(soldAccount.wealthStats.auctionEvents.length, 1);
+
+    const reset = await fetch(`${baseUrl}/api/dashboard/accounts/auction-credits/reset`, {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    });
+    assert.strictEqual(reset.status, 200);
+    const resetBody = await reset.json();
+    assert.strictEqual(resetBody.result.accountsReset, 1);
+    assert.strictEqual(resetBody.result.auctionEventsDeleted, 1);
+
+    const afterReset = await fetch(`${baseUrl}/api/dashboard/accounts`, { headers: { Cookie: cookie } });
+    const resetAccount = (await afterReset.json()).accounts.find((row) => row.minecraft_username === 'ResetDashboardOne');
+    assert.strictEqual(resetAccount.wealthStats.soldAuctionCredit, 0);
+    assert.strictEqual(resetAccount.wealthStats.auctionEvents.length, 0);
+  } finally {
+    await close(server);
+  }
+});
+
 test('dashboard account list refreshes auction index before computing ah listed value', async () => {
   const nowMs = Date.now();
   let ensureFreshCalls = 0;

@@ -1190,6 +1190,22 @@ function listMinecraftAccountResolvedAuctionUuids(db, accountId) {
   `).all(accountId).map((row) => row.auctionUuid);
 }
 
+function resetMinecraftAccountAuctionCredits(db) {
+  const statsReset = db.prepare(`
+    UPDATE minecraft_account_stats
+    SET sold_auction_credit = 0,
+        collected_auction_credit = 0,
+        updated_at = ?
+    WHERE sold_auction_credit != 0
+       OR collected_auction_credit != 0
+  `).run(nowIso());
+  const eventsDeleted = db.prepare('DELETE FROM minecraft_account_auction_snapshots').run();
+  return {
+    accountsReset: statsReset.changes || 0,
+    auctionEventsDeleted: eventsDeleted.changes || 0,
+  };
+}
+
 function normalizeProxyType(value) {
   const type = String(value || 'SOCKS5').trim().toUpperCase();
   if (!['SOCKS5', 'SOCKS4', 'HTTP'].includes(type)) {
@@ -1593,6 +1609,7 @@ module.exports = {
   recordMinecraftAccountAuctionCollection,
   listMinecraftAccountAuctionEvents,
   listMinecraftAccountResolvedAuctionUuids,
+  resetMinecraftAccountAuctionCredits,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,

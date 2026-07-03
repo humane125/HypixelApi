@@ -42,6 +42,7 @@ const {
   recordMinecraftAccountAuctionCollection,
   listMinecraftAccountAuctionEvents,
   listMinecraftAccountResolvedAuctionUuids,
+  resetMinecraftAccountAuctionCredits,
   recordMinecraftAccountHeartbeat,
   recordMinecraftAccountConnectionStatus,
   updateMinecraftAccountProxy,
@@ -2402,6 +2403,23 @@ function createAppServer(options = {}) {
           account,
           wealthStats: account?.wealthStats || null,
         });
+      } catch (err) {
+        writeJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (pathname === '/api/dashboard/accounts/auction-credits/reset' && req.method === 'POST') {
+      try {
+        const access = requireDashboardAccountManager(authorizeDashboard(req));
+        if (!access.ok) {
+          writeJson(res, access.status, access.payload);
+          return;
+        }
+        const result = resetMinecraftAccountAuctionCredits(db);
+        auditRequest(db, access.auth, req, 'minecraft_account.auction_credits_reset', result);
+        dashboardAccounts?.broadcast();
+        writeJson(res, 200, { ok: true, result });
       } catch (err) {
         writeJson(res, 400, { error: err.message });
       }
