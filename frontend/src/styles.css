@@ -2137,9 +2137,66 @@ tbody tr:hover {
 }
 
 @media (max-width: 720px) {
+  body {
+    overflow-x: hidden;
+  }
+
   .app-shell {
-    width: min(100vw - 20px, 1440px);
+    width: min(calc(100% - 20px), 1440px);
     padding-top: 10px;
+    padding-bottom: 28px;
+    gap: 14px;
+  }
+
+  .topbar,
+  .status-strip,
+  .results-panel,
+  .control-panel {
+    border-radius: 8px;
+  }
+
+  .topbar {
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .brand-block {
+    align-items: flex-start;
+  }
+
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+
+  h1 {
+    font-size: 1.55rem;
+    line-height: 1.05;
+  }
+
+  .brand-block p,
+  .status-strip p {
+    line-height: 1.35;
+  }
+
+  .topbar-actions,
+  .inline-actions {
+    gap: 8px;
+  }
+
+  .inline-actions .btn,
+  .topbar-actions .btn {
+    width: 100%;
+  }
+
+  .view-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .view-tabs button {
+    min-width: 0;
+    padding-inline: 10px;
   }
 
   .search-grid,
@@ -2156,8 +2213,99 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 
+  .stats-row {
+    gap: 10px;
+  }
+
+  .stat-card {
+    min-height: 112px;
+    padding: 16px;
+  }
+
+  .dashboard-main {
+    order: 1;
+  }
+
+  .dashboard-sidebar {
+    order: 2;
+  }
+
+  .mod-release-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mod-release-card {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .mod-release-card .btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .release-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .results-panel,
+  .control-panel {
+    padding: 16px;
+  }
+
+  .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .section-heading-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .folder-tabs {
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .folder-tabs button {
+    flex: 1 1 calc(50% - 8px);
+    justify-content: center;
+  }
+
   .account-grid {
     grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .account-card {
+    padding: 14px;
+  }
+
+  .account-card-head {
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .account-avatar {
+    width: 52px;
+    height: 52px;
+  }
+
+  .uuid-row dd,
+  .account-meta dd,
+  .release-main code {
+    overflow-wrap: anywhere;
+  }
+
+  .eye-correction-form {
+    grid-template-columns: minmax(0, 1fr) 82px 54px;
+  }
+
+  .account-action-row {
+    gap: 8px;
   }
 
   .item-field,
@@ -2177,6 +2325,35 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dashboard-users-panel .table-wrap,
+  .api-keys-panel .table-wrap {
+    overflow-x: auto;
+  }
+
+  .dashboard-users-panel table,
+  .api-keys-panel table {
+    min-width: 520px;
+  }
+
+  th,
+  td {
+    padding: 11px 10px;
+  }
+
+  .key-actions {
+    min-width: 0;
+    flex-direction: column;
+  }
+
+  .key-actions .btn {
+    width: 100%;
+  }
+
   .remote-instance-left,
   .remote-title-row,
   .remote-instance-actions,
@@ -2186,7 +2363,24 @@ tbody tr:hover {
   }
 
   .remote-quick-actions {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px;
+  }
+
+  .remote-action-panel {
+    padding: 16px;
+  }
+
+  .remote-section-title {
+    align-items: flex-start;
+  }
+
+  .remote-command-input {
+    width: 100%;
+  }
+
+  .remote-examples {
+    margin-top: 0;
   }
 
   .remote-screenshot-panel {
@@ -2194,13 +2388,23 @@ tbody tr:hover {
   }
 
   .remote-screenshot-stage {
-    height: clamp(300px, 46vh, 420px);
-    max-height: 420px;
+    height: clamp(220px, 42vh, 360px);
+    max-height: 360px;
   }
 
   .remote-log-line {
-    grid-template-columns: 1fr;
-    gap: 3px;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 6px;
+    align-items: baseline;
+  }
+
+  .remote-log-line p {
+    grid-column: 1 / -1;
+    padding-left: 0;
+  }
+
+  .remote-log-list {
+    max-height: 360px;
   }
 
   .remote-lightbox {
@@ -2221,5 +2425,99 @@ tbody tr:hover {
   .remote-lightbox-stage {
     height: calc(100vh - 210px);
     min-height: 300px;
+  }
+}
+
+@media (max-width: 420px) {
+  .app-shell {
+    width: calc(100% - 12px);
+    padding-top: 6px;
+  }
+
+  .topbar,
+  .results-panel,
+  .control-panel,
+  .status-strip {
+    padding: 12px;
+  }
+
+  .brand-mark {
+    display: none;
+  }
+
+  h1 {
+    font-size: 1.36rem;
+  }
+
+  .view-tabs button {
+    min-height: 38px;
+    gap: 6px;
+    font-size: 0.86rem;
+  }
+
+  .folder-tabs button {
+    flex-basis: 100%;
+  }
+
+  .stat-card {
+    min-height: 96px;
+  }
+
+  .account-card-head {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
+  }
+
+  .account-avatar {
+    width: 46px;
+    height: 46px;
+  }
+
+  .account-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .eye-correction-form {
+    grid-template-columns: minmax(0, 1fr) 54px;
+  }
+
+  .eye-correction-form label {
+    grid-column: 1 / -1;
+  }
+
+  .eye-correction-form input {
+    text-align: left;
+  }
+
+  .remote-instance-head,
+  .remote-action-panel {
+    padding: 12px;
+  }
+
+  .remote-icon-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .remote-avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .remote-quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-screenshot-stage {
+    height: 240px;
+  }
+
+  .remote-empty-screenshot,
+  .remote-empty-log,
+  .remote-not-found {
+    padding: 28px 16px;
+  }
+
+  .remote-lightbox-stage {
+    min-height: 240px;
   }
 }
