@@ -1512,26 +1512,36 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
     }
   }, []);
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboardData = useCallback(async (user) => {
     try {
-      const [meBody, accountsBody, releasesBody] = await Promise.all([
-        apiFetch('/api/dashboard/me', null),
+      const [accountsBody, releasesBody] = await Promise.all([
         apiFetch('/api/dashboard/accounts', null),
         apiFetch('/api/dashboard/mod-releases', null),
       ]);
-      const keysBody = meBody.user.role === 'owner'
-        ? await apiFetch('/api/dashboard/api-keys', null)
-        : { apiKeys: [] };
-      const usersBody = meBody.user.role === 'owner'
-        ? await apiFetch('/api/dashboard/users', null)
-        : { users: [] };
-      setMe(meBody.user);
+      const [keysBody, usersBody] = user.role === 'owner'
+        ? await Promise.all([
+          apiFetch('/api/dashboard/api-keys', null),
+          apiFetch('/api/dashboard/users', null),
+        ])
+        : [{ apiKeys: [] }, { users: [] }];
       setAccounts(accountsBody.accounts || []);
       setModReleases(releasesBody.releases || []);
       setProxyDrafts(proxyDraftsFromAccounts(accountsBody.accounts || []));
       setApiKeys(keysBody.apiKeys || []);
       setDashboardUsers(usersBody.users || []);
       setStatusMessage('Dashboard loaded');
+    } catch (err) {
+      setStatusMessage(err.message);
+    }
+  }, []);
+
+  const loadDashboard = useCallback(async () => {
+    try {
+      const meBody = await apiFetch('/api/dashboard/me', null);
+      setMe(meBody.user);
+      setStatusMessage('Dashboard loaded');
+      setDashboardLoading(false);
+      loadDashboardData(meBody.user);
     } catch (err) {
       setMe(null);
       setAccounts([]);
@@ -1542,10 +1552,9 @@ function DashboardView({ remoteAccountKey = null, navigateView }) {
       setApiKeys([]);
       setDashboardUsers([]);
       setStatusMessage(err.message);
-    } finally {
       setDashboardLoading(false);
     }
-  }, []);
+  }, [loadDashboardData]);
 
   useEffect(() => {
     loadDashboard();

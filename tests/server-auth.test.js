@@ -1880,13 +1880,20 @@ test('dashboard managers can reset all auction credits', async () => {
   }
 });
 
-test('dashboard account list refreshes auction index before computing ah listed value', async () => {
+test('dashboard account list uses cached auction index without waiting for refresh', async () => {
   const nowMs = Date.now();
   let ensureFreshCalls = 0;
-  let auctionItems = [];
+  let auctionItems = [{
+    uuid: 'cached-dashboard-auction',
+    auctioneer: '00000000000000000000000000000941',
+    starting_bid: 11_000_000,
+    bin: true,
+    end: nowMs + 60_000,
+  }];
   const auctionIndex = {
     ensureFresh: async () => {
       ensureFreshCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 150));
       auctionItems = [{
         uuid: 'fresh-dashboard-auction',
         auctioneer: '00000000000000000000000000000941',
@@ -1897,10 +1904,13 @@ test('dashboard account list refreshes auction index before computing ah listed 
       return { source: 'fresh', status: { ready: true } };
     },
     refresh: async () => ({ source: 'cache', status: { ready: true } }),
-    getStatus: () => ({ ready: ensureFreshCalls > 0 }),
+    getStatus: () => ({ ready: true }),
     getItems: () => auctionItems,
   };
-  const { db, owner, server } = createTestServerWithOptions({ auctionIndex });
+  const { db, owner, server } = createTestServerWithOptions({
+    auctionIndex,
+    auctionWealthScanIntervalMs: false,
+  });
   createMinecraftAccount(db, {
     ownerUserId: owner.id,
     label: 'Fresh AH',
@@ -1910,14 +1920,15 @@ test('dashboard account list refreshes auction index before computing ah listed 
 
   const baseUrl = await listen(server);
   try {
+    const cookie = await loginDashboard(baseUrl);
     const listed = await fetch(`${baseUrl}/api/dashboard/accounts`, {
-      headers: { Cookie: await loginDashboard(baseUrl) },
+      headers: { Cookie: cookie },
     });
     assert.strictEqual(listed.status, 200);
     const account = (await listed.json()).accounts.find((row) => row.minecraft_username === 'FreshAuctionAccount');
 
-    assert.strictEqual(ensureFreshCalls, 1);
-    assert.strictEqual(account.wealthStats.ahListedValue, 24_999_000);
+    assert.strictEqual(ensureFreshCalls, 0);
+    assert.strictEqual(account.wealthStats.ahListedValue, 11_000_000);
   } finally {
     await close(server);
   }

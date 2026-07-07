@@ -2329,7 +2329,6 @@ function createAppServer(options = {}) {
         writeJson(res, access.status, access.payload);
         return;
       }
-      await refreshAuctionIndexForDashboardAccounts();
       writeJson(res, 200, { accounts: listDashboardMinecraftAccounts() });
       return;
     }
