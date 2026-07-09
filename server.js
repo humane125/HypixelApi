@@ -2333,6 +2333,42 @@ function createAppServer(options = {}) {
       return;
     }
 
+    if (pathname === '/api/mod/releases' && req.method === 'GET') {
+      const access = authorize(req, parsedUrl, {}, ['mod:connect']);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      const releases = listModReleases(releaseDir).map((release) => ({
+        ...release,
+        downloadUrl: `/api/mod/releases/${encodeURIComponent(release.filename)}/download`,
+      }));
+      writeJson(res, 200, { releases });
+      return;
+    }
+
+    const modReleaseDownloadMatch = pathname.match(/^\/api\/mod\/releases\/([^/]+)\/download$/);
+    if (modReleaseDownloadMatch && req.method === 'GET') {
+      const access = authorize(req, parsedUrl, {}, ['mod:connect']);
+      if (!access.ok) {
+        writeJson(res, access.status, access.payload);
+        return;
+      }
+      const filename = decodeURIComponent(modReleaseDownloadMatch[1] || '');
+      const filePath = findModReleaseFile(releaseDir, filename);
+      if (!filePath) {
+        writeJson(res, 404, { error: 'Mod release not found' });
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/java-archive',
+        'Content-Disposition': `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`,
+        'Cache-Control': 'private, max-age=0, must-revalidate',
+      });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
     if (pathname === '/api/dashboard/mod-releases' && req.method === 'GET') {
       const access = authorizeDashboard(req);
       if (!access.ok) {

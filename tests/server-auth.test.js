@@ -1567,6 +1567,60 @@ test('dashboard mod releases require login and download jars from configured fol
   }
 });
 
+test('mod release manifest accepts mod api keys and downloads verified jars', async () => {
+  const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mod-api-releases-'));
+  fs.writeFileSync(path.join(releaseDir, 'autoauction-1.0.0.jar'), 'autoauction jar');
+  fs.writeFileSync(path.join(releaseDir, 'altmanager-1.0.0.jar'), 'altmanager jar');
+  fs.writeFileSync(path.join(releaseDir, 'readme.txt'), 'not a jar');
+  const { db, owner, server } = createTestServerWithOptions({ releaseDir });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'Mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_release_key',
+  });
+  const viewer = createUser(db, { username: 'release-viewer', role: 'viewer' });
+  createApiKey(db, {
+    userId: viewer.id,
+    name: 'Read-only key',
+    scopes: ['auction:read'],
+    rawKey: 'hpx_test_release_without_mod_scope',
+  });
+  const baseUrl = await listen(server);
+  try {
+    const denied = await fetch(`${baseUrl}/api/mod/releases`);
+    assert.strictEqual(denied.status, 401);
+
+    const listed = await fetch(`${baseUrl}/api/mod/releases`, {
+      headers: { Authorization: 'Bearer hpx_test_mod_release_key' },
+    });
+    assert.strictEqual(listed.status, 200);
+    const body = await listed.json();
+    assert.strictEqual(body.releases.length, 2);
+    const autoAuction = body.releases.find((release) => release.modName === 'AutoAuction');
+    assert.ok(autoAuction);
+    assert.strictEqual(autoAuction.filename, 'autoauction-1.0.0.jar');
+    assert.match(autoAuction.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(autoAuction.downloadUrl.includes('/api/mod/releases/autoauction-1.0.0.jar/download'));
+
+    const downloaded = await fetch(`${baseUrl}${autoAuction.downloadUrl}`, {
+      headers: { Authorization: 'Bearer hpx_test_mod_release_key' },
+    });
+    assert.strictEqual(downloaded.status, 200);
+    assert.strictEqual(downloaded.headers.get('content-type'), 'application/java-archive');
+    assert.strictEqual(downloaded.headers.get('content-disposition'), 'attachment; filename="autoauction-1.0.0.jar"');
+    assert.strictEqual(await downloaded.text(), 'autoauction jar');
+
+    const forbidden = await fetch(`${baseUrl}/api/mod/releases`, {
+      headers: { Authorization: 'Bearer hpx_test_release_without_mod_scope' },
+    });
+    assert.strictEqual(forbidden.status, 403);
+  } finally {
+    await close(server);
+    fs.rmSync(releaseDir, { recursive: true, force: true });
+  }
+});
+
 async function loginDashboard(baseUrl, username = 'owner', password = 'owner-password') {
   const login = await fetch(`${baseUrl}/api/dashboard/login`, {
     method: 'POST',
