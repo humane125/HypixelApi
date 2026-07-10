@@ -1077,7 +1077,21 @@ function findMatchingActiveAuctionSnapshot(db, accountId, itemName, collectedPri
     normalizedItem
     && normalizedAuctionItemName(snapshot.item_name) === normalizedItem
   ));
-  return sameNameSnapshots.find((snapshot) => isCloseAuctionPayout(snapshot.price, collectedPrice))
+  const normalizedCollectedPrice = safeNonNegativeInteger(collectedPrice);
+  const compatibleSameNameSnapshots = sameNameSnapshots
+    .filter((snapshot) => isCloseAuctionPayout(snapshot.price, normalizedCollectedPrice))
+    .sort((left, right) => {
+      const leftPrice = safeNonNegativeInteger(left.price);
+      const rightPrice = safeNonNegativeInteger(right.price);
+      const leftExact = leftPrice === normalizedCollectedPrice;
+      const rightExact = rightPrice === normalizedCollectedPrice;
+      if (leftExact !== rightExact) return leftExact ? -1 : 1;
+      const priceDifference = Math.abs(leftPrice - normalizedCollectedPrice)
+        - Math.abs(rightPrice - normalizedCollectedPrice);
+      if (priceDifference !== 0) return priceDifference;
+      return (Date.parse(right.last_seen_at) || 0) - (Date.parse(left.last_seen_at) || 0);
+    });
+  return compatibleSameNameSnapshots[0]
     || sameNameSnapshots[0]
     || activeSnapshots.find((snapshot) => isCloseAuctionPayout(snapshot.price, collectedPrice))
     || null;

@@ -422,6 +422,57 @@ test('auction collection matches identical item names by compatible payout price
   );
 });
 
+test('auction collection prefers an older exact payout over a newer compatible payout', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Overlapping compatible prices',
+    minecraftUuid: '00000000-0000-0000-0000-000000000916',
+    minecraftUsername: 'OverlappingPriceAuction',
+  });
+  const itemName = 'Fierce Final Destination Chestplate';
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [
+    {
+      uuid: 'same-item-exact-25m',
+      auctioneer: '00000000000000000000000000000916',
+      item_name: itemName,
+      starting_bid: 25_000_000,
+      end: 2_000,
+    },
+    {
+      uuid: 'same-item-approximate-26m',
+      auctioneer: '00000000000000000000000000000916',
+      item_name: itemName,
+      starting_bid: 26_000_000,
+      end: 2_000,
+    },
+  ], { nowMs: 1_000 });
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [], { nowMs: 1_100 });
+  db.prepare('UPDATE minecraft_account_auction_snapshots SET last_seen_at = ? WHERE auction_uuid = ?')
+    .run(new Date(1_200).toISOString(), 'same-item-exact-25m');
+  db.prepare('UPDATE minecraft_account_auction_snapshots SET last_seen_at = ? WHERE auction_uuid = ?')
+    .run(new Date(1_300).toISOString(), 'same-item-approximate-26m');
+  assert.strictEqual(getMinecraftAccountStats(db, account.id).sold_auction_credit, 51_000_000);
+
+  const recorded = recordMinecraftAccountAuctionCollection(db, account.id, {
+    itemName,
+    price: 25_000_000,
+    buyerName: 'ExactPriceBuyer',
+    nowMs: 1_400,
+  });
+
+  assert.strictEqual(recorded.credited, true);
+  assert.strictEqual(recorded.event.auction_uuid, 'same-item-exact-25m');
+  assert.strictEqual(getMinecraftAccountStats(db, account.id).sold_auction_credit, 26_000_000);
+  assert.strictEqual(
+    db.prepare('SELECT state FROM minecraft_account_auction_snapshots WHERE auction_uuid = ?')
+      .get('same-item-approximate-26m').state,
+    'sold',
+  );
+});
+
 test('auction credit reset clears sold collected and stored auction events', () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });

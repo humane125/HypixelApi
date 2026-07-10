@@ -3137,6 +3137,7 @@ test('mod and dashboard release downloads handle open and read stream errors', a
   const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-stream-errors-'));
   fs.writeFileSync(path.join(releaseDir, 'open-error.jar'), 'open error fixture');
   fs.writeFileSync(path.join(releaseDir, 'read-error.jar'), 'read error fixture');
+  const pendingReadFailures = [];
   const createReadStream = (filePath) => {
     const stream = new PassThrough();
     process.nextTick(() => {
@@ -3147,7 +3148,9 @@ test('mod and dashboard release downloads handle open and read stream errors', a
       }
       stream.emit('open', 1);
       stream.write('partial jar');
-      stream.emit('error', Object.assign(new Error('Simulated read failure'), { code: 'EIO' }));
+      pendingReadFailures.push(() => {
+        stream.emit('error', Object.assign(new Error('Simulated read failure'), { code: 'EIO' }));
+      });
     });
     return stream;
   };
@@ -3180,13 +3183,14 @@ test('mod and dashboard release downloads handle open and read stream errors', a
       assert.strictEqual(openFailure.status, 404);
       assert.deepStrictEqual(await openFailure.json(), { error: 'Mod release not found' });
 
-      await assert.rejects(async () => {
-        const readFailure = await fetch(`${baseUrl}${route.prefix}/read-error.jar/download`, {
-          headers: route.headers,
-        });
-        assert.strictEqual(readFailure.status, 200);
-        await readFailure.arrayBuffer();
+      const readFailure = await fetch(`${baseUrl}${route.prefix}/read-error.jar/download`, {
+        headers: route.headers,
       });
+      assert.strictEqual(readFailure.status, 200);
+      const failRead = pendingReadFailures.shift();
+      assert.ok(failRead);
+      failRead();
+      await assert.rejects(() => readFailure.arrayBuffer());
     }
   } finally {
     await close(server);
