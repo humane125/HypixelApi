@@ -103,6 +103,44 @@ function writeJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function streamModRelease(res, filePath, createReadStream = fs.createReadStream) {
+  let readStream;
+  const handleError = (err) => {
+    if (!res.headersSent) {
+      const missing = err?.code === 'ENOENT';
+      writeJson(res, missing ? 404 : 500, {
+        error: missing ? 'Mod release not found' : 'Failed to read mod release',
+      });
+    } else if (!res.destroyed) {
+      res.destroy();
+    }
+    if (readStream && !readStream.destroyed) {
+      readStream.destroy();
+    }
+  };
+
+  try {
+    readStream = createReadStream(filePath);
+  } catch (err) {
+    handleError(err);
+    return;
+  }
+
+  readStream.once('error', handleError);
+  readStream.once('open', () => {
+    if (res.destroyed) {
+      readStream.destroy();
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/java-archive',
+      'Content-Disposition': `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`,
+      'Cache-Control': 'private, max-age=0, must-revalidate',
+    });
+    readStream.pipe(res);
+  });
+}
+
 function parseRequestBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -204,6 +242,7 @@ function createAuctionIndexService(options = {}) {
       const totalPages = page0.totalPages || 0;
       const totalAuctions = page0.totalAuctions || 0;
       const indexed = [];
+      const failedPages = [];
       let completedPages = 1;
 
       if (sendEvent) {
@@ -228,6 +267,7 @@ function createAuctionIndexService(options = {}) {
               if (auction.bin) indexed.push(normalizeAuction(auction));
             }
           } catch (err) {
+            failedPages.push({ page, error: err });
             if (sendEvent) sendEvent('warning', { message: `Failed page ${page}: ${err.message}` });
           } finally {
             completedPages++;
@@ -243,6 +283,14 @@ function createAuctionIndexService(options = {}) {
       }
 
       await Promise.all(Array.from({ length: Math.min(concurrencyLimit, Math.max(1, totalPages)) }, worker));
+
+      if (failedPages.length > 0) {
+        failedPages.sort((left, right) => left.page - right.page);
+        const details = failedPages
+          .map(({ page, error }) => `page ${page}: ${error.message}`)
+          .join('; ');
+        throw new Error(`Failed to refresh Hypixel auction ${details}`);
+      }
 
       indexed.sort((a, b) => a.price - b.price);
       state.ready = true;
@@ -1598,6 +1646,10 @@ function sendDeletedModAccountError(socket) {
   setImmediate(() => socket.close(4000, 'account_deleted'));
 }
 
+function modAccountStillExists(db, accountId) {
+  return Boolean(db.prepare('SELECT id FROM minecraft_accounts WHERE id = ?').get(accountId));
+}
+
 function safeStatInteger(value, fallback = 0) {
   if (value == null || value === '') return fallback;
   const number = Number(value);
@@ -1860,6 +1912,10 @@ function attachModWebSocketServer(server, {
       }
 
       if (message.type === 'account_stats') {
+        if (!modAccountStillExists(db, account.id)) {
+          sendDeletedModAccountError(socket);
+          return;
+        }
         const stats = upsertMinecraftAccountStats(db, account.id, cleanAccountStatsMessage(message));
         dashboardAccounts?.broadcast();
         sendSocketJson(socket, {
@@ -1872,6 +1928,10 @@ function attachModWebSocketServer(server, {
       }
 
       if (message.type === 'summoning_eye_event') {
+        if (!modAccountStillExists(db, account.id)) {
+          sendDeletedModAccountError(socket);
+          return;
+        }
         const stats = applySummoningEyeEvent(db, account.id, message);
         if (!stats) {
           sendSocketJson(socket, {
@@ -1931,6 +1991,7 @@ function createAppServer(options = {}) {
     : createLoginRateLimiter(options.loginRateLimit);
   const secureCookies = options.secureCookies;
   const releaseDir = options.releaseDir || process.env.MOD_RELEASE_DIR || DEFAULT_MOD_RELEASE_DIR;
+  const createReleaseReadStream = options.createReadStream || fs.createReadStream;
 
   const accountHeartbeatWindowMs = options.accountHeartbeatWindowMs || DEFAULT_ACCOUNT_HEARTBEAT_WINDOW_MS;
   let getLiveAccountStatuses = () => [];
@@ -2360,12 +2421,7 @@ function createAppServer(options = {}) {
         writeJson(res, 404, { error: 'Mod release not found' });
         return;
       }
-      res.writeHead(200, {
-        'Content-Type': 'application/java-archive',
-        'Content-Disposition': `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`,
-        'Cache-Control': 'private, max-age=0, must-revalidate',
-      });
-      fs.createReadStream(filePath).pipe(res);
+      streamModRelease(res, filePath, createReleaseReadStream);
       return;
     }
 
@@ -2396,12 +2452,7 @@ function createAppServer(options = {}) {
         writeJson(res, 404, { error: 'Mod release not found' });
         return;
       }
-      res.writeHead(200, {
-        'Content-Type': 'application/java-archive',
-        'Content-Disposition': `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`,
-        'Cache-Control': 'private, max-age=0, must-revalidate',
-      });
-      fs.createReadStream(filePath).pipe(res);
+      streamModRelease(res, filePath, createReleaseReadStream);
       return;
     }
 
@@ -2440,6 +2491,8 @@ function createAppServer(options = {}) {
         updateMinecraftAccountStatus(db, body.accountId, {
           status: body.status,
           banReason: body.banReason,
+          banUntil: body.banUntil,
+          banId: body.banId,
         });
         auditRequest(db, access.auth, req, 'minecraft_account.status', {
           accountId: body.accountId,

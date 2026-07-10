@@ -373,6 +373,55 @@ test('auction collection chat credits sold amount and records item name once', (
   assert.strictEqual(events[0].itemName, 'Fierce Final Destination Chestplate');
 });
 
+test('auction collection matches identical item names by compatible payout price first', () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Duplicate item prices',
+    minecraftUuid: '00000000-0000-0000-0000-000000000915',
+    minecraftUsername: 'DuplicatePriceAuction',
+  });
+  const itemName = 'Fierce Final Destination Chestplate';
+
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [
+    {
+      uuid: 'same-item-20m',
+      auctioneer: '00000000000000000000000000000915',
+      item_name: itemName,
+      starting_bid: 20_000_000,
+      end: 2_000,
+    },
+    {
+      uuid: 'same-item-25m',
+      auctioneer: '00000000000000000000000000000915',
+      item_name: itemName,
+      starting_bid: 25_000_000,
+      end: 2_000,
+    },
+  ], { nowMs: 1_000 });
+  reconcileMinecraftAccountAuctionSnapshots(db, [account], [], { nowMs: 1_100 });
+  db.prepare('UPDATE minecraft_account_auction_snapshots SET last_seen_at = ? WHERE auction_uuid = ?')
+    .run(new Date(1_200).toISOString(), 'same-item-20m');
+  assert.strictEqual(getMinecraftAccountStats(db, account.id).sold_auction_credit, 45_000_000);
+
+  const recorded = recordMinecraftAccountAuctionCollection(db, account.id, {
+    itemName,
+    price: 25_000_000,
+    buyerName: 'PriceMatchedBuyer',
+    nowMs: 1_300,
+  });
+
+  assert.strictEqual(recorded.credited, true);
+  assert.strictEqual(recorded.event.auction_uuid, 'same-item-25m');
+  assert.strictEqual(getMinecraftAccountStats(db, account.id).sold_auction_credit, 20_000_000);
+  assert.strictEqual(
+    db.prepare('SELECT state FROM minecraft_account_auction_snapshots WHERE auction_uuid = ?')
+      .get('same-item-20m').state,
+    'sold',
+  );
+});
+
 test('auction credit reset clears sold collected and stored auction events', () => {
   const db = createDatabase(':memory:');
   const owner = createUser(db, { username: 'owner', role: 'owner' });

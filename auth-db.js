@@ -1073,10 +1073,14 @@ function findMatchingActiveAuctionSnapshot(db, accountId, itemName, collectedPri
       AND state IN ('active', 'sold')
     ORDER BY last_seen_at DESC
   `).all(accountId);
-  return activeSnapshots.find((snapshot) => (
+  const sameNameSnapshots = activeSnapshots.filter((snapshot) => (
     normalizedItem
     && normalizedAuctionItemName(snapshot.item_name) === normalizedItem
-  )) || activeSnapshots.find((snapshot) => isCloseAuctionPayout(snapshot.price, collectedPrice)) || null;
+  ));
+  return sameNameSnapshots.find((snapshot) => isCloseAuctionPayout(snapshot.price, collectedPrice))
+    || sameNameSnapshots[0]
+    || activeSnapshots.find((snapshot) => isCloseAuctionPayout(snapshot.price, collectedPrice))
+    || null;
 }
 
 function recordMinecraftAccountAuctionCollection(db, accountId, {

@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { PassThrough } = require('stream');
 const WebSocket = require('ws');
 
 const {
@@ -3003,6 +3004,230 @@ test('non-owner cannot create dashboard users', async () => {
       }),
     });
     assert.strictEqual(denied.status, 403);
+  } finally {
+    await close(server);
+  }
+});
+
+test('auction index preserves the complete cache when an advertised page exhausts retries', async () => {
+  let refreshGeneration = 'complete';
+  let failedPageAttempts = 0;
+  const jsonResponse = (body) => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: { get: () => null },
+    json: async () => body,
+  });
+  const auction = (uuid, price) => ({
+    uuid,
+    auctioneer: '00000000000000000000000000000001',
+    item_name: uuid,
+    item_lore: '',
+    tier: 'LEGENDARY',
+    starting_bid: price,
+    bin: true,
+  });
+  const service = createAuctionIndexService({
+    concurrencyLimit: 1,
+    fetchImpl: async (requestUrl) => {
+      const page = Number(new URL(String(requestUrl)).searchParams.get('page'));
+      if (refreshGeneration === 'complete') {
+        return jsonResponse({
+          success: true,
+          lastUpdated: 100,
+          totalPages: 2,
+          totalAuctions: 2,
+          auctions: [auction(`complete-${page}`, 1_000 + page)],
+        });
+      }
+      if (page === 1) {
+        failedPageAttempts += 1;
+        return {
+          ok: false,
+          status: 429,
+          statusText: 'Too Many Requests',
+          headers: { get: () => '0' },
+        };
+      }
+      return jsonResponse({
+        success: true,
+        lastUpdated: 200,
+        totalPages: 3,
+        totalAuctions: 3,
+        auctions: [auction(`partial-${page}`, 2_000 + page)],
+      });
+    },
+  });
+
+  await service.refresh();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  refreshGeneration = 'partial';
+
+  await assert.rejects(service.refresh(), /page 1/i);
+  const status = service.getStatus();
+  assert.strictEqual(failedPageAttempts, 3);
+  assert.strictEqual(status.ready, true);
+  assert.strictEqual(status.refreshing, false);
+  assert.strictEqual(status.lastUpdated, 100);
+  assert.strictEqual(status.totalPages, 2);
+  assert.strictEqual(status.totalAuctions, 2);
+  assert.strictEqual(status.indexedBinCount, 2);
+  assert.ok(status.ageMs >= 20);
+  assert.deepStrictEqual(service.getItems().map((item) => item.uuid), ['complete-0', 'complete-1']);
+});
+
+test('mod websocket rejects stat events after the connected account is deleted', async () => {
+  const db = createDatabase(':memory:');
+  const owner = createUser(db, { username: 'owner', role: 'owner' });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_deleted_stat_events',
+  });
+  const profiles = {
+    DeletedStatsPlayer: '00000000000000000000000000000031',
+    DeletedEyePlayer: '00000000000000000000000000000032',
+  };
+  const server = createAppServer({
+    db,
+    fetchImpl: async (requestUrl) => {
+      const username = decodeURIComponent(String(requestUrl).split('/').pop());
+      return {
+        ok: true,
+        json: async () => ({ id: profiles[username], name: username }),
+      };
+    },
+  });
+  const baseUrl = await listen(server);
+  const sockets = [];
+  const cases = [
+    ['DeletedStatsPlayer', { type: 'account_stats', purse: 1_000_000 }],
+    ['DeletedEyePlayer', { type: 'summoning_eye_event', action: 'drop', quantity: 1 }],
+  ];
+
+  try {
+    for (const [username, event] of cases) {
+      const socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/api/mod/ws');
+      sockets.push(socket);
+      await waitForSocketOpen(socket);
+      socket.send(JSON.stringify({
+        type: 'auth',
+        apiKey: 'hpx_test_mod_deleted_stat_events',
+        username,
+      }));
+      const authed = await waitForSocketMessage(socket);
+      assert.strictEqual(authed.type, 'auth_ok');
+
+      db.prepare('DELETE FROM minecraft_accounts WHERE id = ?').run(authed.account.id);
+      const deletedPromise = waitForSocketMessage(socket);
+      socket.send(JSON.stringify(event));
+      const deleted = await deletedPromise;
+      assert.strictEqual(deleted.type, 'error');
+      assert.strictEqual(deleted.code, 'account_deleted');
+    }
+  } finally {
+    for (const socket of sockets) closeSocketSilently(socket);
+    await close(server);
+  }
+});
+
+test('mod and dashboard release downloads handle open and read stream errors', async () => {
+  const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-stream-errors-'));
+  fs.writeFileSync(path.join(releaseDir, 'open-error.jar'), 'open error fixture');
+  fs.writeFileSync(path.join(releaseDir, 'read-error.jar'), 'read error fixture');
+  const createReadStream = (filePath) => {
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      if (path.basename(filePath) === 'open-error.jar') {
+        const error = Object.assign(new Error('Simulated replaced JAR'), { code: 'ENOENT' });
+        stream.emit('error', error);
+        return;
+      }
+      stream.emit('open', 1);
+      stream.write('partial jar');
+      stream.emit('error', Object.assign(new Error('Simulated read failure'), { code: 'EIO' }));
+    });
+    return stream;
+  };
+  const { db, owner, server } = createTestServerWithOptions({ releaseDir, createReadStream });
+  createApiKey(db, {
+    userId: owner.id,
+    name: 'mod release stream key',
+    scopes: ['mod:connect'],
+    rawKey: 'hpx_test_mod_release_stream_errors',
+  });
+  const baseUrl = await listen(server);
+
+  try {
+    const cookie = await loginDashboard(baseUrl);
+    const routes = [
+      {
+        prefix: '/api/mod/releases',
+        headers: { Authorization: 'Bearer hpx_test_mod_release_stream_errors' },
+      },
+      {
+        prefix: '/api/dashboard/mod-releases',
+        headers: { Cookie: cookie },
+      },
+    ];
+
+    for (const route of routes) {
+      const openFailure = await fetch(`${baseUrl}${route.prefix}/open-error.jar/download`, {
+        headers: route.headers,
+      });
+      assert.strictEqual(openFailure.status, 404);
+      assert.deepStrictEqual(await openFailure.json(), { error: 'Mod release not found' });
+
+      await assert.rejects(async () => {
+        const readFailure = await fetch(`${baseUrl}${route.prefix}/read-error.jar/download`, {
+          headers: route.headers,
+        });
+        assert.strictEqual(readFailure.status, 200);
+        await readFailure.arrayBuffer();
+      });
+    }
+  } finally {
+    await close(server);
+    fs.rmSync(releaseDir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard account status preserves timed ban metadata', async () => {
+  const { db, owner, server } = createTestServer();
+  const account = createMinecraftAccount(db, {
+    ownerUserId: owner.id,
+    label: 'Timed dashboard ban',
+    minecraftUuid: '00000000-0000-0000-0000-000000000033',
+    minecraftUsername: 'TimedDashboardBan',
+  });
+  const baseUrl = await listen(server);
+  const banUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const response = await fetch(`${baseUrl}/api/dashboard/accounts/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: await loginDashboard(baseUrl),
+      },
+      body: JSON.stringify({
+        accountId: account.id,
+        status: 'banned',
+        banReason: 'Timed dashboard test ban',
+        banUntil,
+        banId: '#DASHBOARD-TIMED',
+      }),
+    });
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), { ok: true });
+
+    const stored = db.prepare('SELECT * FROM minecraft_accounts WHERE id = ?').get(account.id);
+    assert.strictEqual(stored.status, 'banned');
+    assert.strictEqual(stored.ban_reason, 'Timed dashboard test ban');
+    assert.strictEqual(stored.ban_until, banUntil);
+    assert.strictEqual(stored.ban_id, '#DASHBOARD-TIMED');
   } finally {
     await close(server);
   }
