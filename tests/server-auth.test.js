@@ -17,16 +17,28 @@ const {
 } = require('../auth-db');
 const { createAppServer, createAuctionIndexService } = require('../server');
 
+const testCases = [];
+let testRunScheduled = false;
+
 function test(name, fn) {
-  Promise.resolve()
-    .then(fn)
-    .then(() => console.log(`ok - ${name}`))
-    .catch((err) => {
+  testCases.push({ name, fn });
+  if (testRunScheduled) return;
+  testRunScheduled = true;
+  process.nextTick(runTestsSequentially);
+}
+
+async function runTestsSequentially() {
+  for (const { name, fn } of testCases) {
+    try {
+      await fn();
+      console.log(`ok - ${name}`);
+    } catch (err) {
       console.error(`not ok - ${name}`);
-      process.nextTick(() => {
-        throw err;
-      });
-    });
+      console.error(err);
+      process.exitCode = 1;
+      return;
+    }
+  }
 }
 
 function listen(server) {
